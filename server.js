@@ -250,6 +250,7 @@ const agent = async (base, token, method, path, body, timeoutMs = 20000) => {
 };
 const proxyAgent = (method, path, body) => agent(process.env.PROXY_AGENT_URL, process.env.PROXY_AGENT_TOKEN, method, path, body);
 const siteAgent = (method, path, body, ms) => agent(process.env.SITE_AGENT_URL, process.env.SITE_AGENT_TOKEN, method, path, body, ms);
+const hostAgent = (method, path, body, ms) => agent(process.env.HOST_AGENT_URL, process.env.HOST_AGENT_TOKEN, method, path, body, ms);
 const fail = (response, error) => response.status(error.status && error.status < 600 ? (error.status === 401 ? 502 : error.status) : 502).json({ message: error.message || 'Agent not reachable.' });
 
 let routeCache = { at: 0, data: [] };
@@ -327,6 +328,15 @@ const syncSites = async () => {
       routed.add(site.name); routeCache.at = 0;
     }
   } catch { /* agents down: try again next round */ }
+  if (!process.env.HOST_AGENT_URL) return;
+  try {
+    const [{ apps = [] }, { routes: have = [] }] = await Promise.all([hostAgent('GET', '/apps'), proxyAgent('GET', '/routes')]);
+    for (const a of apps) {
+      if (deleting.has(a.name) || have.some((r) => r.name === a.name)) continue;
+      await proxyAgent('PUT', `/routes/${a.name}`, { target: `http://${a.ip}:${a.port}/`, kind: 'app', title: a.title || a.name });
+      routeCache.at = 0;
+    }
+  } catch { /* host agent down */ }
 };
 setInterval(syncSites, 30000).unref();
 
@@ -360,6 +370,10 @@ app.delete('/api/routes/:name', async (request, response) => {
     try {
       await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
       if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+      if (route.kind === 'app') {
+        const app = ((await hostAgent('GET', '/apps')).apps || []).find((a) => a.name === name);
+        if (app) await hostAgent('DELETE', `/apps/${app.ctid}`, undefined, 120000);
+      }
     } finally { deleting.delete(name); routed.delete(name); }
     routeCache.at = 0; siteCache.at = 0;
     return response.json({ deleted: name, kind: route.kind });
@@ -397,6 +411,75 @@ app.put('/api/notes', (request, response) => {
     renameSync(NOTES_FILE + '.tmp', NOTES_FILE);
     return response.json(notes);
   } catch (error) { return response.status(500).json({ message: `Could not save notes: ${error.message}` }); }
+});
+
+
+// ---------- apps on their own container (host agent builds them in the background) ----------
+app.get('/api/apps', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  try { return response.json(await hostAgent('GET', '/apps')); } catch (error) { return fail(response, error); }
+});
+app.post('/api/apps', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const b = request.body ?? {};
+  const name = String(b.name || '').trim().toLowerCase();
+  if (['sites', 'codezi', 'api', 'assets', 'landing', 'docker-avi'].includes(name)) return response.status(400).json({ message: `${name} is already used by the server, pick another name.` });
+  if ((await routes()).some((r) => r.name === name)) return response.status(400).json({ message: `A site called ${name} already exists.` });
+  try {
+    return response.status(202).json(await hostAgent('POST', '/apps', { name, title: String(b.title || name), source_type: b.source_type, source: String(b.source || ''), port: Number(b.port) || 80, cores: Number(b.cores) || 1, memory: Number(b.memory) || 1024, disk: Number(b.disk) || 8 }));
+  } catch (error) { return fail(response, error); }
+});
+app.post('/api/apps/:ctid/update', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  if (!/^\d+$/.test(request.params.ctid)) return response.status(400).json({ message: 'Bad id.' });
+  try { return response.status(202).json(await hostAgent('POST', `/apps/${request.params.ctid}/update`)); } catch (error) { return fail(response, error); }
+});
+
+// ---------- history: every build, AI edit and app deploy, with its log ----------
+const JOB_ID = /^[a-z]+-[a-z0-9-]+-\d+$/;
+app.get('/api/activity', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const [sitesJobs, hostJobs] = await Promise.all([
+    siteAgent('GET', '/jobs').then((b) => (b.jobs || []).map((j) => ({ ...j, source: 'site' }))).catch(() => []),
+    process.env.HOST_AGENT_URL ? hostAgent('GET', '/jobs').then((b) => (b.jobs || []).map((j) => ({ ...j, source: 'host' }))).catch(() => []) : [],
+  ]);
+  const jobs = [...sitesJobs, ...hostJobs].sort((a, b) => String(b.started).localeCompare(String(a.started))).slice(0, 100);
+  return response.json({ jobs });
+});
+app.get('/api/activity/:source/:id', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const { source, id } = request.params;
+  if (!JOB_ID.test(id) || !['site', 'host'].includes(source)) return response.status(400).json({ message: 'Bad id.' });
+  try {
+    const job = await (source === 'site' ? siteAgent : hostAgent)('GET', `/jobs/${id}`);
+    // a finished app build gets its address published here (and by the 30 s sync as a fallback)
+    if (source === 'host' && job.kind === 'app' && job.state === 'done' && job.result && !routed.has(job.name)) {
+      await proxyAgent('PUT', `/routes/${job.name}`, { target: job.result.target, kind: 'app', title: job.result.title || job.name }).catch(() => {});
+      routed.add(job.name); routeCache.at = 0;
+    }
+    return response.json(job);
+  } catch (error) { return fail(response, error); }
+});
+
+// ---------- logs ----------
+const taskLines = async (limit) => {
+  const tasks = await pve(`/nodes/${node()}/tasks?limit=${limit}`);
+  return (tasks || []).map((t) => `${new Date(t.starttime * 1000).toISOString().replace('T', ' ').slice(0, 19)} ${t.type}${t.id ? ` ${t.id}` : ''} by ${t.user}: ${t.status || 'running'}`).reverse();
+};
+app.get('/api/logs', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const base = [{ key: 'proxmox-tasks', label: 'Proxmox: recent tasks (create, start, stop, backups)', group: 'Server' }];
+  try { return response.json({ sources: [...base, ...((await hostAgent('GET', '/logs')).sources || [])], host: true }); } catch (error) { return response.json({ sources: base, host: false, message: error.message }); }
+});
+app.get('/api/logs/:key', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const key = request.params.key;
+  const lines = Math.max(10, Math.min(2000, Number(request.query.lines) || 200));
+  if (!/^[a-z0-9-]{2,60}$/.test(key)) return response.status(400).json({ message: 'Bad log name.' });
+  try {
+    if (key === 'proxmox-tasks') return response.json({ key, lines: await taskLines(Math.min(lines, 500)) });
+    return response.json(await hostAgent('GET', `/logs/${key}?lines=${lines}`, undefined, 30000));
+  } catch (error) { return fail(response, error); }
 });
 
 // ---------- static site ----------
