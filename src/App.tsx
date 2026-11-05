@@ -1,80 +1,315 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent } from 'react';
-import { dashboardConfig, type Site, type UserSection } from './config/dashboardConfig';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent, ReactNode } from 'react';
+import config from './config/services.json';
 
-type Page = 'gateway' | 'workspace' | 'provision' | 'monitor';
+// ---------- types ----------
+type Page = 'overview' | 'services' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
+type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number };
+type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
+type Storage = { name: string; type: string; used: number; total: number };
+type Stats = { configured: boolean; node: string; host: Host; guests: Guest[]; storage: Storage[]; at: string };
+type SiteState = { id: string; up: boolean; code: number; ms: number };
+type Site = (typeof config.sites)[number];
 
+// ---------- helpers ----------
 const pageForHash = (): Page => {
   const route = window.location.hash.replace(/^#\/?/, '');
-  if (route === 'workspace/provision') return 'provision';
-  if (route === 'workspace') return 'workspace';
-  if (route === 'monitor') return 'monitor';
-  return 'gateway';
+  if (route === 'services') return 'services';
+  if (route === 'provision') return 'provision';
+  return 'overview';
 };
+const bytes = (n: number) => {
+  if (!n) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i >= 3 ? 1 : 0)} ${units[i]}`;
+};
+const ratio = (used: number, total: number) => (total > 0 ? Math.min(1, used / total) : 0);
+const pct = (r: number) => `${Math.round(r * 100)}%`;
+const duration = (s: number) => {
+  if (!s) return '-';
+  const d = Math.floor(s / 86400); const h = Math.floor((s % 86400) / 3600); const m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const level = (r: number) => (r >= 0.9 ? 'crit' : r >= 0.75 ? 'warn' : 'ok');
+const matches = (query: string, ...fields: (string | number)[]) => !query || fields.join(' ').toLowerCase().includes(query);
 
-const Icon = ({ name, className = 'h-4 w-4' }: { name: string; className?: string }) => {
-  const paths: Record<string, React.ReactNode> = {
-    grid: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
-    layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>,
+function usePoll<T>(url: string, ms: number) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<{ code: number; message: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const response = await fetch(url);
+        const body = await response.json();
+        if (!alive) return;
+        if (response.ok) { setData(body as T); setError(null); } else setError({ code: response.status, message: body.message ?? 'Request failed' });
+      } catch {
+        if (alive) setError({ code: 0, message: 'Dashboard server not reachable' });
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), ms);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [url, ms]);
+  return { data, error };
+}
+
+// ---------- small UI pieces ----------
+const Icon = ({ name, className = 'icon' }: { name: string; className?: string }) => {
+  const paths: Record<string, ReactNode> = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
     server: <><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 7h.01M7 18h.01" /></>,
     search: <><circle cx="11" cy="11" r="6" /><path d="m20 20-4-4" /></>,
-    arrow: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
-    external: <><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1 2-2V8a2 2 0 0 1 2-2h6" /></>,
-    activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
+    external: <><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></>,
     plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
     box: <><path d="m21 8-9 5-9-5 9-5 9 5Z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></>,
-    back: <><path d="M19 12H5" /><path d="m11 18-6-6 6-6" /></>,
+    db: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
+    pulse: <path d="M3 12h4l3-8 4 16 3-8h4" />,
+    disk: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
 
-const StatusPill = ({ status }: { status: string }) => <span className={status === 'Online' ? 'status-pill status-online' : 'status-pill status-building'}><i />{status}</span>;
-
-const SiteCard = ({ site }: { site: Site }) => <a href={site.url} target="_blank" rel="noreferrer" className="site-card group"><div className="flex min-w-0 items-center gap-3"><div className="site-icon">{site.icon}</div><div className="min-w-0"><div className="flex items-center gap-2"><h3>{site.title}</h3><span className="tag">{site.badge}</span></div><p>{site.description}</p></div></div><Icon name="arrow" className="h-4 w-4 shrink-0 text-slate-500 transition group-hover:translate-x-1 group-hover:text-cyan-300" /></a>;
-
-const UserColumn = ({ user, query }: { user: UserSection; query: string }) => {
-  const sites = user.sites.filter((site) => `${site.title} ${site.description} ${site.badge}`.toLowerCase().includes(query));
-  return <section className="user-column"><header className="mb-5 flex items-center gap-3"><img src={user.avatar} alt="" className="avatar" /><div><p className="eyebrow">{user.role}</p><h2>{user.name}</h2></div><span className="ml-auto h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_#34d399]" title="Available" /></header><div className="space-y-2.5">{sites.map((site) => <SiteCard key={site.title} site={site} />)}</div>{sites.length === 0 && <p className="empty-state">No services match this search.</p>}</section>;
+const Ring = ({ value, label, detail }: { value: number; label: string; detail: string }) => {
+  const r = 34; const c = 2 * Math.PI * r;
+  return (
+    <div className="ring-card">
+      <svg viewBox="0 0 80 80" className="ring" role="img" aria-label={`${label} ${pct(value)}`}>
+        <circle cx="40" cy="40" r={r} className="ring-track" />
+        <circle cx="40" cy="40" r={r} className={`ring-value ${level(value)}`} strokeDasharray={c} strokeDashoffset={c * (1 - value)} />
+        <text x="40" y="45" textAnchor="middle">{pct(value)}</text>
+      </svg>
+      <div><p className="label">{label}</p><p className="detail">{detail}</p></div>
+    </div>
+  );
 };
 
-const ProvisionPage = ({ back }: { back: () => void }) => {
+const Bar = ({ value }: { value: number }) => <div className="bar"><span className={level(value)} style={{ width: pct(value) }} /></div>;
+const Dot = ({ state }: { state: 'up' | 'down' | 'idle' }) => <span className={`dot ${state}`} aria-label={state} />;
+
+// ---------- pages ----------
+const SetupNotice = ({ message }: { message: string }) => (
+  <section className="panel notice">
+    <h2>Connect the dashboard to Proxmox</h2>
+    <p>{message}</p>
+    <ol>
+      <li>On the Proxmox host: <code>pveum user add dashboard@pve</code>, then <code>pveum acl modify / -user dashboard@pve -role PVEAuditor</code>, then <code>pveum user token add dashboard@pve read --privsep 0</code>.</li>
+      <li>In <code>.env</code> on FrontPage set <code>PROXMOX_URL</code>, <code>PROXMOX_NODE=server</code>, <code>PROXMOX_READ_TOKEN_ID=dashboard@pve!read</code>, <code>PROXMOX_READ_TOKEN_SECRET</code> and <code>PROXMOX_INSECURE_TLS=1</code>.</li>
+      <li>Restart: <code>pm2 restart landing-page --update-env</code>.</li>
+    </ol>
+  </section>
+);
+
+const Overview = ({ query, stats, statsError, sites }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState> }) => {
+  const guests = (stats?.guests ?? []).filter((g) => matches(query, g.name, g.id, g.type, g.status));
+  const db = stats?.guests.find((g) => g.id === 106);
+  const running = stats?.guests.filter((g) => g.status === 'running').length ?? 0;
+  const upCount = config.sites.filter((s) => sites[s.id]?.up).length;
+  return (
+    <>
+      <header className="hero">
+        <div>
+          <p className="eyebrow">{stats ? `${stats.node} · Proxmox ${stats.host.version.split('/')[1] ?? ''}` : 'Homelab'}</p>
+          <h1>{config.title}</h1>
+          <p className="lede">{config.subtitle}</p>
+        </div>
+        <div className="hero-chips">
+          <span className="chip"><Dot state={running ? 'up' : 'idle'} />{running}/{stats?.guests.length ?? '-'} guests running</span>
+          <span className="chip"><Dot state={upCount === config.sites.length ? 'up' : 'down'} />{upCount}/{config.sites.length} sites up</span>
+          {stats && <span className="chip">up {duration(stats.host.uptime)}</span>}
+        </div>
+      </header>
+
+      {statsError && statsError.code === 503 && <SetupNotice message={statsError.message} />}
+      {statsError && statsError.code !== 503 && <section className="panel notice error"><h2>Can't read server stats</h2><p>{statsError.message}</p></section>}
+
+      {stats && (
+        <section className="rings">
+          <Ring value={stats.host.cpu} label="CPU" detail={`${stats.host.cpus} threads · load ${stats.host.load.slice(0, 3).join(' ')}`} />
+          <Ring value={ratio(stats.host.mem, stats.host.maxmem)} label="Memory" detail={`${bytes(stats.host.mem)} of ${bytes(stats.host.maxmem)}`} />
+          <Ring value={ratio(stats.host.disk, stats.host.maxdisk)} label="System disk" detail={`${bytes(stats.host.disk)} of ${bytes(stats.host.maxdisk)}`} />
+          {db && <Ring value={ratio(db.mem, db.maxmem)} label="Database memory" detail={`MongoDB · CT 106 · ${db.status}`} />}
+        </section>
+      )}
+
+      <div className="grid-2">
+        <section className="panel">
+          <div className="panel-head"><h2><Icon name="pulse" />Sites</h2><a href="#/services" className="link">All services</a></div>
+          <ul className="site-list">
+            {config.sites.filter((s) => matches(query, s.title, s.description, ...s.tags)).map((site) => {
+              const state = sites[site.id];
+              return (
+                <li key={site.id}>
+                  <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
+                  <a href={site.url}>{site.title}</a>
+                  <span className="muted">{!state ? 'checking…' : state.up ? `${state.ms} ms` : state.code ? `error ${state.code}` : 'no answer'}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        <section className="panel">
+          <div className="panel-head"><h2><Icon name="disk" />Storage</h2></div>
+          {(stats?.storage ?? []).map((s) => (
+            <div className="storage" key={s.name}>
+              <div className="row"><strong>{s.name}</strong><span className="muted">{bytes(s.used)} / {bytes(s.total)}</span></div>
+              <Bar value={ratio(s.used, s.total)} />
+            </div>
+          ))}
+          {!stats && <p className="muted">Waiting for Proxmox…</p>}
+        </section>
+      </div>
+
+      <section className="panel">
+        <div className="panel-head"><h2><Icon name="box" />Containers and VMs</h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
+        <div className="table">
+          <div className="tr th"><span>ID</span><span>Name</span><span>CPU</span><span>Memory</span><span>Disk</span><span>Uptime</span></div>
+          {guests.map((g) => {
+            const mem = ratio(g.mem, g.maxmem); const disk = ratio(g.disk, g.maxdisk);
+            return (
+              <div className="tr" key={g.id}>
+                <span className="mono">{g.id}</span>
+                <span className="name"><Dot state={g.status === 'running' ? 'up' : 'idle'} />{g.name}{g.type === 'vm' && <em>VM</em>}{g.id === 106 && <em><Icon name="db" className="icon-xs" />DB</em>}</span>
+                <span className="mono">{pct(g.cpu)}</span>
+                <span className="cell-bar"><Bar value={mem} /><small>{bytes(g.mem)} / {bytes(g.maxmem)}</small></span>
+                <span className="cell-bar"><Bar value={disk} /><small>{pct(disk)}</small></span>
+                <span className="muted">{g.status === 'running' ? duration(g.uptime) : g.status}</span>
+              </div>
+            );
+          })}
+          {stats && guests.length === 0 && <p className="muted pad">Nothing matches "{query}".</p>}
+        </div>
+      </section>
+    </>
+  );
+};
+
+const SiteCard = ({ site, state }: { site: Site; state?: SiteState }) => (
+  <a className="card" href={site.url}>
+    <div className="card-top"><span className="badge">{site.icon}</span><Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} /></div>
+    <h3>{site.title}</h3>
+    <p>{site.description}</p>
+    <div className="tags">{site.tags.map((t) => <span key={t}>{t}</span>)}<span>CT {site.ct}</span></div>
+  </a>
+);
+
+const Services = ({ query, sites }: { query: string; sites: Record<string, SiteState> }) => {
+  const shown = config.sites.filter((s) => matches(query, s.title, s.description, ...s.tags));
+  const links = config.links.filter((l) => matches(query, l.title, l.description));
+  return (
+    <>
+      <header className="hero"><div><p className="eyebrow">Services</p><h1>Apps on the server</h1><p className="lede">Open a site, or use the search bar to find one.</p></div></header>
+      <section className="cards">{shown.map((s) => <SiteCard key={s.id} site={s} state={sites[s.id]} />)}</section>
+      <h2 className="section-title">Admin and code</h2>
+      <section className="cards small">
+        {links.map((l) => (
+          <a className="card" key={l.title} href={l.url} target="_blank" rel="noreferrer">
+            <div className="card-top"><span className="badge">{l.icon}</span><Icon name="external" className="icon muted" /></div>
+            <h3>{l.title}</h3><p>{l.description}</p>
+          </a>
+        ))}
+      </section>
+      {!shown.length && !links.length && <p className="muted">Nothing matches "{query}".</p>}
+    </>
+  );
+};
+
+const Provision = () => {
   const [type, setType] = useState<ProvisionType>('lxc');
   const [name, setName] = useState('');
   const [cores, setCores] = useState(2);
   const [memory, setMemory] = useState(2048);
+  const [password, setPassword] = useState('');
   const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
-  const [password, setPassword] = useState('');
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setState('loading'); setMessage('');
     try {
       const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-provision-password': password }, body: JSON.stringify({ type, name, cores, memory }) });
-      const data: { message?: string; task?: string } = await response.json();
+      const data: { message?: string; task?: string; id?: number } = await response.json();
       if (!response.ok) throw new Error(data.message || 'Proxmox did not accept the request.');
-      setState('success'); setMessage(`Provisioning task queued: ${data.task || 'accepted'}`);
-      setName('');
+      setState('success'); setMessage(`Creating ${type.toUpperCase()} ${data.id ?? ''}. CPU and memory are applied when the clone finishes.`);
     } catch (error) { setState('error'); setMessage(error instanceof Error ? error.message : 'Unable to reach the provisioning service.'); }
   };
 
-  return <><button type="button" className="back-link" onClick={back}><Icon name="back" />Shared workspace</button><header className="page-head provision-head"><div><p className="eyebrow">Shared workspace / Proxmox</p><h1>Provision a service.</h1><p className="lede">Create a new instance from one of your approved homelab templates.</p></div><span className="secure-note"><span className="pulse-dot" />Tailscale-connected</span></header><div className="provision-layout"><form className="provision-form" onSubmit={submit}><div className="form-section"><label>Instance type</label><div className="type-switch"><button type="button" className={type === 'lxc' ? 'selected' : ''} onClick={() => setType('lxc')}><Icon name="box" />LXC container</button><button type="button" className={type === 'vm' ? 'selected' : ''} onClick={() => setType('vm')}><Icon name="server" />Virtual machine</button></div></div><div className="form-section"><label htmlFor="instance-name">Instance name</label><input id="instance-name" required minLength={2} maxLength={50} pattern="[a-zA-Z0-9][a-zA-Z0-9-]*" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="e.g. paperless" /><small>Letters, numbers, and hyphens only.</small></div><div className="resource-grid"><div className="form-section"><label htmlFor="cores">CPU cores</label><input id="cores" type="number" min="1" max="16" value={cores} onChange={(event) => setCores(Number(event.target.value))} /></div><div className="form-section"><label htmlFor="memory">Memory (MiB)</label><input id="memory" type="number" min="512" max="32768" step="512" value={memory} onChange={(event) => setMemory(Number(event.target.value))} /></div></div><div className="form-section"><label htmlFor="provision-password">Provisioning password</label><input id="provision-password" type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /><small>Set as PROVISION_PASSWORD on the server.</small></div><button className="provision-button" disabled={state === 'loading'} type="submit"><Icon name="plus" />{state === 'loading' ? 'Creating instance...' : `Create ${type === 'lxc' ? 'LXC' : 'VM'}`}</button>{state !== 'idle' && <p className={state === 'success' ? 'form-message success' : 'form-message error'}>{message}</p>}</form><aside className="provision-aside"><Icon name="server" className="h-6 w-6 text-cyan-300" /><h2>Template-based provisioning</h2><p>Each request clones the template you configure on Proxmox. The API token remains on the server and is never sent to the browser.</p><div className="aside-rule" /><p className="aside-label">Target</p><strong>Your configured Proxmox node</strong></aside></div></>;
+  return (
+    <>
+      <header className="hero"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM</h1><p className="lede">Clones one of your templates. Needs the provisioning password.</p></div></header>
+      <form className="panel form" onSubmit={submit}>
+        <div className="segmented" role="radiogroup">
+          <button type="button" className={type === 'lxc' ? 'on' : ''} onClick={() => setType('lxc')}><Icon name="box" />Container (LXC)</button>
+          <button type="button" className={type === 'vm' ? 'on' : ''} onClick={() => setType('vm')}><Icon name="server" />Virtual machine</button>
+        </div>
+        <label>Name<input required minLength={2} maxLength={50} pattern="[a-z0-9][a-z0-9-]*" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. paperless" /></label>
+        <div className="row-2">
+          <label>CPU cores<input type="number" min={1} max={16} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
+          <label>Memory (MiB)<input type="number" min={512} max={32768} step={512} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
+        </div>
+        <label>Provisioning password<input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <button className="primary" disabled={state === 'loading'} type="submit"><Icon name="plus" />{state === 'loading' ? 'Creating…' : `Create ${type === 'lxc' ? 'container' : 'VM'}`}</button>
+        {state !== 'idle' && state !== 'loading' && <p className={`message ${state}`}>{message}</p>}
+      </form>
+    </>
+  );
 };
 
-export const App = () => {
+// ---------- shell ----------
+export function App() {
   const [page, setPage] = useState<Page>(pageForHash);
   const [query, setQuery] = useState('');
-  const normalizedQuery = query.trim().toLowerCase();
-  useEffect(() => { const syncPage = () => setPage(pageForHash()); window.addEventListener('hashchange', syncPage); return () => window.removeEventListener('hashchange', syncPage); }, []);
-  const navigate = (next: Page) => { const routes: Record<Page, string> = { gateway: '', workspace: 'workspace', provision: 'workspace/provision', monitor: 'monitor' }; window.location.hash = routes[next]; };
-  const visibleCount = useMemo(() => dashboardConfig.userSections.reduce((total, user) => total + user.sites.filter((site) => `${site.title} ${site.description} ${site.badge}`.toLowerCase().includes(normalizedQuery)).length, 0), [normalizedQuery]);
-  const workspaceActive = page === 'workspace' || page === 'provision';
+  const [now, setNow] = useState(() => new Date());
+  const search = useRef<HTMLInputElement>(null);
+  const { data: stats, error: statsError } = usePoll<Stats>('./api/stats', 5000);
+  const { data: siteData } = usePoll<{ results: SiteState[] }>('./api/services', 30000);
+  const sites = useMemo(() => Object.fromEntries((siteData?.results ?? []).map((r) => [r.id, r])), [siteData]);
 
-  return <div className="app-shell"><aside className="sidebar"><button type="button" className="brand" onClick={() => navigate('gateway')} aria-label="Open the gateway"><span className="brand-mark"><Icon name="grid" /></span><span>orbit<span>hub</span></span></button><nav aria-label="Primary navigation"><button type="button" className={page === 'gateway' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('gateway')}><Icon name="grid" />Gateway</button><button type="button" className={workspaceActive ? 'nav-item active' : 'nav-item'} onClick={() => navigate('workspace')}><Icon name="layers" />Shared workspace</button><button type="button" className={page === 'monitor' ? 'nav-item active' : 'nav-item'} onClick={() => navigate('monitor')}><Icon name="server" />Server monitor</button></nav><div className="sidebar-foot"><div className="flex items-center gap-2 text-xs text-slate-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />All systems operational</div><p>Last heartbeat: just now</p></div></aside><main className="main-content">
-    {page === 'gateway' && <><header className="page-head gateway-head"><div><p className="eyebrow">Homelab gateway</p><h1>Your corner of the internet.</h1><p className="lede">Everything your crew is building, running, and sharing.</p></div><div className="health-card"><span className="pulse-dot" /><div><strong>All systems online</strong><small>12 services responding</small></div><Icon name="activity" className="ml-3 h-5 w-5 text-cyan-300" /></div></header><div className="search-row"><div className="search-box"><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search services, projects, or tags..." aria-label="Search services" />{query && <button type="button" onClick={() => setQuery('')} aria-label="Clear search">Clear</button>}</div><span className="results-count">{visibleCount} services</span></div><div className="users-grid">{dashboardConfig.userSections.map((user) => <UserColumn key={user.name} user={user} query={normalizedQuery} />)}</div></>}
-    {page === 'workspace' && <><header className="page-head workspace-head"><div><p className="eyebrow">Built together</p><h1>Shared workspace.</h1><p className="lede">The services and experiments the whole crew keeps moving.</p></div><button type="button" className="workspace-action" onClick={() => navigate('provision')}><Icon name="plus" />Provision on Proxmox</button></header><div className="project-grid">{dashboardConfig.sharedProjects.map((project) => <a className="project-card" key={project.title} href={project.url} target="_blank" rel="noreferrer"><div className="flex items-start justify-between gap-4"><span className="project-icon">{project.icon}</span><StatusPill status={project.status} /></div><div><h2>{project.title}</h2><p>{project.description}</p></div><div className="flex items-center justify-between gap-3"><div className="flex flex-wrap gap-1.5">{project.stack.map((tech) => <span className="tech-tag" key={tech}>{tech}</span>)}</div><Icon name="external" className="h-4 w-4 shrink-0 text-slate-500" /></div></a>)}</div></>}
-    {page === 'provision' && <ProvisionPage back={() => navigate('workspace')} />}
-    {page === 'monitor' && <><header className="page-head"><p className="eyebrow">Infrastructure</p><h1>Server monitor.</h1><p className="lede">A quiet place for host health, containers, and logs.</p></header><div className="monitor-placeholder"><Icon name="server" className="h-8 w-8 text-cyan-300" /><h2>Monitoring is on deck.</h2><p>This space is ready for your container metrics and system logs.</p><div className="monitor-lines"><span /><span /><span /></div></div></>}
-  </main></div>;
-};
+  useEffect(() => {
+    const onHash = () => setPage(pageForHash());
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+      if (e.key === '/' && !typing) { e.preventDefault(); search.current?.focus(); }
+      if (e.key === 'Escape' && document.activeElement === search.current) { setQuery(''); search.current?.blur(); }
+    };
+    const clock = window.setInterval(() => setNow(new Date()), 30000);
+    window.addEventListener('hashchange', onHash); window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('hashchange', onHash); window.removeEventListener('keydown', onKey); window.clearInterval(clock); };
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['provision', 'Create', 'plus']];
+
+  return (
+    <div className="shell">
+      <aside className="side">
+        <a className="brand" href="#/"><span className="logo">HL</span><span>Homelab</span></a>
+        <nav>
+          {nav.map(([id, label, icon]) => (
+            <a key={id} href={`#/${id === 'overview' ? '' : id}`} className={page === id ? 'active' : ''}><Icon name={icon} />{label}</a>
+          ))}
+        </nav>
+        <div className="side-foot">
+          <span className="muted">{now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+          <strong>{now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong>
+        </div>
+      </aside>
+      <main>
+        <div className="topbar">
+          <label className="search">
+            <Icon name="search" />
+            <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sites, containers, links…" aria-label="Search" />
+            <kbd>/</kbd>
+          </label>
+        </div>
+        {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} />}
+        {page === 'services' && <Services query={q} sites={sites} />}
+        {page === 'provision' && <Provision />}
+      </main>
+    </div>
+  );
+}
