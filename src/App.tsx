@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
+import { Help } from './ui/Help';
+import { Backdrop } from './ui/Backdrop';
 
 // ---------- types ----------
 type Page = 'overview' | 'services' | 'sites' | 'notes' | 'provision';
@@ -60,8 +62,8 @@ const Login = ({ onLogin }: { onLogin: (pass: string) => void }) => {
   };
   return (
     <form className="panel form login" onSubmit={submit}>
-      <h2>Unlock create and delete</h2>
-      <p className="muted">Enter the main password. It stays in this browser tab until you close it.</p>
+      <h2>Unlock the controls <Help title="Why unlock?">Creating, deleting, starting and stopping things needs the main password. Looking around does not. The password stays in this browser tab until you close it or press Lock.</Help></h2>
+      <p className="muted">Enter the main password to continue.</p>
       <label>Password<input type="password" required autoComplete="current-password" value={value} onChange={(e) => setValue(e.target.value)} /></label>
       <button className="primary" type="submit">Unlock</button>
       {error && <p className="message error">{error}</p>}
@@ -112,16 +114,33 @@ const Icon = ({ name, className = 'icon' }: { name: string; className?: string }
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
 
-const Ring = ({ value, label, detail }: { value: number; label: string; detail: string }) => {
+function useTween(target: number, ms = 700) {
+  const [value, setValue] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    const start = performance.now(); const a = from.current; let raf = 0;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / ms); const eased = 1 - (1 - k) ** 3;
+      const v = a + (target - a) * eased; setValue(v); from.current = v;
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return value;
+}
+
+const Ring = ({ value: target, label, detail, help }: { value: number; label: string; detail: string; help: string }) => {
   const r = 34; const c = 2 * Math.PI * r;
+  const value = useTween(target);
   return (
     <div className="ring-card">
-      <svg viewBox="0 0 80 80" className="ring" role="img" aria-label={`${label} ${pct(value)}`}>
+      <svg viewBox="0 0 80 80" className="gauge" role="img" aria-label={`${label} ${pct(value)}`}>
         <circle cx="40" cy="40" r={r} className="ring-track" />
         <circle cx="40" cy="40" r={r} className={`ring-value ${level(value)}`} strokeDasharray={c} strokeDashoffset={c * (1 - value)} />
         <text x="40" y="45" textAnchor="middle">{pct(value)}</text>
       </svg>
-      <div><p className="label">{label}</p><p className="detail">{detail}</p></div>
+      <div><p className="label">{label} <Help title={label}>{help}</Help></p><p className="detail">{detail}</p></div>
     </div>
   );
 };
@@ -169,13 +188,19 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
   const db = stats?.guests.find((g) => g.id === 106);
   const running = stats?.guests.filter((g) => g.status === 'running').length ?? 0;
   const upCount = config.sites.filter((s) => sites[s.id]?.up).length;
+  const down = [
+    ...config.sites.filter((s) => sites[s.id] && !sites[s.id].up).map((s) => s.title),
+    ...(stats?.guests ?? []).filter((g) => g.status !== 'running' && g.id !== 102 && g.id !== 104).map((g) => `${g.name} (${g.id})`),
+  ];
   return (
     <>
       <header className="hero">
         <div>
-          <p className="eyebrow">{stats ? `${stats.node} · Proxmox ${stats.host.version.split('/')[1] ?? ''}` : 'Homelab'}</p>
-          <h1>{config.title}</h1>
-          <p className="lede">{config.subtitle}</p>
+          <p className="eyebrow">{stats ? `${stats.node}, Proxmox ${stats.host.version.split('/')[1] ?? ''}` : 'Homelab'}</p>
+          <h1 className="status-line">{!stats ? 'Checking the server…' : down.length === 0 ? 'Everything is running.' : `${down.length} ${down.length === 1 ? 'thing needs' : 'things need'} a look.`}
+            <Help big title="This page: Overview">Live health of the server, refreshed every 5 seconds. The rings are the Proxmox host's CPU, memory and disk. <b>Sites</b> shows which apps answer right now. <b>Containers and VMs</b> lists every guest; unlock with the main password to start, stop or restart them. The moving map in the background is your server: the bright hub is Proxmox and each dot is a container (bright = running).</Help>
+          </h1>
+          <p className="lede">{!stats ? config.subtitle : down.length === 0 ? `${running} containers and ${upCount} sites are up. Proxmox has been running for ${duration(stats.host.uptime)}.` : down.join(', ') + (down.length === 1 ? ' is down.' : ' are down.')}</p>
         </div>
         <div className="hero-chips">
           <span className="chip"><Dot state={running ? 'up' : 'idle'} />{running}/{stats?.guests.length ?? '-'} guests running</span>
@@ -189,16 +214,16 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
 
       {stats && (
         <section className="rings">
-          <Ring value={stats.host.cpu} label="CPU" detail={`${stats.host.cpus} threads · load ${stats.host.load.slice(0, 3).join(' ')}`} />
-          <Ring value={ratio(stats.host.mem, stats.host.maxmem)} label="Memory" detail={`${bytes(stats.host.mem)} of ${bytes(stats.host.maxmem)}`} />
-          <Ring value={ratio(stats.host.disk, stats.host.maxdisk)} label="System disk" detail={`${bytes(stats.host.disk)} of ${bytes(stats.host.maxdisk)}`} />
-          {db && <Ring value={ratio(db.mem, db.maxmem)} label="Database memory" detail={`MongoDB · CT 106 · ${db.status}`} />}
+          <Ring help="How busy the server's processor is right now, across all threads. Load is the average queue over 1, 5 and 15 minutes." value={stats.host.cpu} label="CPU" detail={`${stats.host.cpus} threads · load ${stats.host.load.slice(0, 3).join(' ')}`} />
+          <Ring help="RAM in use on the Proxmox host by all containers and VMs together. Above 90% turns red: stop something or give the server more memory." value={ratio(stats.host.mem, stats.host.maxmem)} label="Memory" detail={`${bytes(stats.host.mem)} of ${bytes(stats.host.maxmem)}`} />
+          <Ring help="The Proxmox system disk (where the OS and templates live). Container disks are listed under Storage." value={ratio(stats.host.disk, stats.host.maxdisk)} label="System disk" detail={`${bytes(stats.host.disk)} of ${bytes(stats.host.maxdisk)}`} />
+          {db && <Ring help="Memory used by the shared MongoDB container (CT 106) that CodeZi and the flight monitor store their data in." value={ratio(db.mem, db.maxmem)} label="Database memory" detail={`MongoDB · CT 106 · ${db.status}`} />}
         </section>
       )}
 
       <div className="grid-2">
         <section className="panel">
-          <div className="panel-head"><h2><Icon name="pulse" />Sites</h2><a href="#/services" className="link">All services</a></div>
+          <div className="panel-head"><h2><Icon name="pulse" />Sites <Help title="Sites">Each app is checked every 30 seconds. Green means it answered, with the response time. Red means it gave an error or no answer. Click a name to open it.</Help></h2><a href="#/services" className="link">All services</a></div>
           <ul className="site-list">
             {config.sites.filter((s) => matches(query, s.title, s.description, ...s.tags)).map((site) => {
               const state = sites[site.id];
@@ -214,7 +239,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
         </section>
 
         <section className="panel">
-          <div className="panel-head"><h2><Icon name="disk" />Storage</h2></div>
+          <div className="panel-head"><h2><Icon name="disk" />Storage <Help title="Storage">Disk space on each Proxmox storage. local holds templates and backups; local-lvm holds the container and VM disks.</Help></h2></div>
           {(stats?.storage ?? []).map((s) => (
             <div className="storage" key={s.name}>
               <div className="row"><strong>{s.name}</strong><span className="muted">{bytes(s.used)} / {bytes(s.total)}</span></div>
@@ -226,7 +251,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
       </div>
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="box" />Containers and VMs</h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
+        <div className="panel-head"><h2><Icon name="box" />Containers and VMs <Help title="Containers and VMs">Every guest on the server with its CPU, memory and disk use. Once unlocked: ↻ restarts, ■ stops and ▶ starts (stop and restart ask first). Delete only shows on guests made from this dashboard. Jacob's app (102) is never touched, and the proxy (101) and this dashboard (105) can't be stopped from here.</Help></h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
         <div className="table">
           {note && <p className="message success">{note}</p>}
           <div className="tr th"><span>ID</span><span>Name</span><span>CPU</span><span>Memory</span><span>Disk</span><span>Uptime</span></div>
@@ -276,9 +301,9 @@ const Services = ({ query, sites }: { query: string; sites: Record<string, SiteS
   const links = config.links.filter((l) => matches(query, l.title, l.description));
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Services</p><h1>Apps on the server</h1><p className="lede">Open a site, or use the search bar to find one.</p></div></header>
+      <header className="hero"><div><p className="eyebrow">Services</p><h1>Apps on the server <Help big title="This page: Services">Every app the server runs, plus admin and code links. Click a card to open it. The dot on each card shows whether it answers right now (checked every 30 seconds). Use the search bar to filter.</Help></h1><p className="lede">Open a site, or use the search bar to find one.</p></div></header>
       <section className="cards">{shown.map((s) => <SiteCard key={s.id} site={s} state={sites[s.id]} />)}</section>
-      <h2 className="section-title">Admin and code</h2>
+      <h2 className="section-title">Admin and code <Help title="Admin and code">Proxmox opens the server's admin panel (only over Tailscale). The GitHub links open each app's code; a push to main deploys it automatically.</Help></h2>
       <section className="cards small">
         {links.map((l) => (
           <a className="card" key={l.title} href={l.url} target="_blank" rel="noreferrer">
@@ -343,10 +368,10 @@ const NotesPage = ({ query, pass, onLogin }: { query: string; pass: string; onLo
   const status = state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : state === 'error' ? error : notes.updated ? `Last saved ${new Date(notes.updated).toLocaleString()}` : '';
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Notes</p><h1>Your notes</h1><p className="lede">Saved prompts and to-dos, on the server so they follow you to any device.</p></div><span className={`muted hint ${state === 'error' ? 'bad' : ''}`}>{status}</span></header>
+      <header className="hero"><div><p className="eyebrow">Notes</p><h1>Your notes <Help big title="This page: Notes">To-dos, saved prompts and a scratch note. Everything is saved on the server, so it is the same on your phone and laptop. Saved prompts have a Build site button that opens the website builder with that text.</Help></h1><p className="lede">Saved prompts and to-dos, on the server so they follow you to any device.</p></div><span className={`muted hint ${state === 'error' ? 'bad' : ''}`}>{status}</span></header>
       <div className="grid-2">
         <section className="panel">
-          <div className="panel-head"><h2><Icon name="check" />To do</h2><span className="muted">{open.length} open</span></div>
+          <div className="panel-head"><h2><Icon name="check" />To do <Help title="To do">Type a task and press Enter. Tick it when done; × deletes it. Clear done removes all ticked tasks.</Help></h2><span className="muted">{open.length} open</span></div>
           <form className="add-row" onSubmit={addTodo}><input value={newTodo} onChange={(e) => setNewTodo(e.target.value)} placeholder="Add a to-do and press Enter" aria-label="New to-do" /><button className="primary" type="submit"><Icon name="plus" /></button></form>
           <ul className="todo-list">
             {[...open, ...done].map((t) => (
@@ -360,7 +385,7 @@ const NotesPage = ({ query, pass, onLogin }: { query: string; pass: string; onLo
           {done.length > 0 && <button type="button" className="link-btn" onClick={() => update((n) => ({ ...n, todos: n.todos.filter((t) => !t.done) }))}>Clear {done.length} done</button>}
         </section>
         <section className="panel">
-          <div className="panel-head"><h2><Icon name="bookmark" />Saved prompts</h2><span className="muted">{prompts.length}</span></div>
+          <div className="panel-head"><h2><Icon name="bookmark" />Saved prompts <Help title="Saved prompts">Keep website ideas or tasks for later. Build site opens the website builder with the prompt filled in. Copy puts it on your clipboard for Gemini or Claude.</Help></h2><span className="muted">{prompts.length}</span></div>
           <form className="add-row" onSubmit={addPrompt}><textarea rows={2} value={newPrompt} onChange={(e) => setNewPrompt(e.target.value)} placeholder="Save a prompt for later (website ideas, Gemini tasks…)" aria-label="New prompt" /><button className="primary" type="submit"><Icon name="plus" /></button></form>
           <ul className="prompt-list">
             {prompts.map((p) => (
@@ -379,7 +404,7 @@ const NotesPage = ({ query, pass, onLogin }: { query: string; pass: string; onLo
         </section>
       </div>
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="note" />Scratch note</h2><span className="muted">saves as you type</span></div>
+        <div className="panel-head"><h2><Icon name="note" />Scratch note <Help title="Scratch note">Free text for anything. It saves by itself a moment after you stop typing.</Help></h2><span className="muted">saves as you type</span></div>
         <textarea className="scratch" rows={8} value={draft ?? notes.note} onChange={(e) => setDraft(e.target.value)} placeholder="Anything: ideas, links, what to ask Claude next…" />
       </section>
     </>
@@ -479,7 +504,9 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
     <>
       <section className="builder">
         <p className="eyebrow"><Icon name="spark" className="icon-xs" /> Website builder</p>
-        <h1>{editing ? <>What should change on <span className="grad">{editing.title}</span>?</> : <>What website do you <span className="grad">want</span>?</>}</h1>
+        <h1>{editing ? <>What should change on {editing.title}?</> : <>What website do you want?</>}
+          <Help big title="This page: Sites">Build a WordPress website with AI. 1. Describe it in the box. 2. Pick a name: it becomes the address /sites/name/. 3. Set a password for the WordPress login (user admin). 4. Press Create. It takes 1–2 minutes and you can leave the page. Your sites are listed below: Edit with AI changes their pages, wp-admin opens WordPress to edit by hand.</Help>
+        </h1>
         <form className="ai-box" onSubmit={submit}>
           <textarea ref={box} rows={3} value={prompt} disabled={running} onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && ready && pass) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
@@ -489,17 +516,21 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
               <span className="chip">Editing /sites/{editing.name}/ <button type="button" aria-label="Stop editing" onClick={() => setEditing(null)}>×</button></span>
             ) : (
               <>
-                <label className="pill"><span>Name</span><input value={name} pattern="[a-z0-9][a-z0-9\-]{1,30}" onChange={(e) => { setNameTouched(true); setName(slug(e.target.value)); }} placeholder="bakery" aria-label="Site name" /></label>
-                <label className="pill"><span>Password</span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>
+                <label className="pill"><span>Name <Help title="Site name">Becomes the web address /sites/name/. Lowercase letters, digits and dashes. It fills in from your description; change it if you like.</Help></span><input value={name} pattern="[a-z0-9][a-z0-9\-]{1,30}" onChange={(e) => { setNameTouched(true); setName(slug(e.target.value)); }} placeholder="bakery" aria-label="Site name" /></label>
+                <label className="pill"><span>Password <Help title="Site password">The WordPress login password for this site (user admin), at least 8 characters. Write it down: it is not shown again.</Help></span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>
               </>
             )}
-            {pass && prompt.trim().length > 3 && <button type="button" className="mark" title="Save this prompt to Notes" aria-label="Save prompt to Notes" disabled={busy === 'mark'} onClick={() => void bookmark()}><Icon name="bookmark" className="icon-xs" />{savedPrompt ? 'Saved' : 'Save'}</button>}
-            <button className="send" type="submit" disabled={!pass || !ready || running || !!busy} aria-label={editing ? 'Apply changes' : 'Create website'}>
-              {busy === 'go' ? '…' : <><Icon name={editing ? 'spark' : 'send'} />{editing ? 'Apply' : 'Create'}</>}
-            </button>
+            <span className="ai-actions">
+              {pass && prompt.trim().length > 3 && <Help title="Save">Saves the text in the box to Notes, under Saved prompts, so you can reuse it later.</Help>}
+              {pass && prompt.trim().length > 3 && <button type="button" className="mark" title="Save this prompt to Notes" aria-label="Save prompt to Notes" disabled={busy === 'mark'} onClick={() => void bookmark()}><Icon name="bookmark" className="icon-xs" />{savedPrompt ? 'Saved' : 'Save'}</button>}
+              <Help title={editing ? 'Apply' : 'Create'}>{editing ? 'Gemini reads the site and rewrites the pages as you asked. Removed pages go to the WordPress trash, so nothing is lost for good.' : !pass ? 'Unlock with the main password first (form below).' : 'Builds WordPress, then Gemini writes the pages from your description. Needs a name and an 8+ character password. Enter in the box does the same.'}</Help>
+              <button className="send" type="submit" disabled={!pass || !ready || running || !!busy} aria-label={editing ? 'Apply changes' : 'Create website'}>
+                {busy === 'go' ? '…' : <><Icon name={editing ? 'spark' : 'send'} />{editing ? 'Apply' : 'Create'}</>}
+              </button>
+            </span>
           </div>
         </form>
-        {!editing && !prompt && ai !== false && <div className="ideas">{IDEAS.map((idea) => <button key={idea} type="button" onClick={() => setPrompt(idea)}>{idea}</button>)}</div>}
+        {!editing && !prompt && ai !== false && <div className="ideas"><Help title="Ideas">Example descriptions. Click one to put it in the box, then edit it.</Help>{IDEAS.map((idea) => <button key={idea} type="button" onClick={() => setPrompt(idea)}>{idea}</button>)}</div>}
         {!editing && name && <p className="muted hint">Address: /sites/{name}/ · log in to WordPress as <code>admin</code> with the password you set.</p>}
       </section>
 
@@ -523,14 +554,14 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
       {!pass && <Login onLogin={onLogin} />}
       {pass && ai === false && (
         <form className="panel form key-form" onSubmit={saveKey}>
-          <h2><Icon name="spark" />Connect Gemini</h2>
+          <h2><Icon name="spark" />Connect Gemini <Help title="Gemini key">The builder uses Google Gemini to write the pages. Make a key at aistudio.google.com and paste it once. It is stored only on the websites server (CT 108) and never shown again.</Help></h2>
           <p className="muted hint">Get a key at aistudio.google.com → Get API key, then paste it here. It is saved on the websites server only, and never shown again.</p>
           <div className="row"><input type="password" required value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your Gemini API key" autoComplete="off" /><button className="primary" type="submit" disabled={busy === 'key'}>{busy === 'key' ? 'Saving…' : 'Save key'}</button></div>
         </form>
       )}
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="grid" />Your sites</h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
+        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added. The dot shows whether each answers. Edit with AI: describe a change and Gemini rewrites the pages. wp-admin: edit text, images and menus by hand (user admin). Delete: removes a WordPress site with its pages and database (asks first, cannot be undone); for an app it only removes the address.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
         <ul className="site-list">
           {shown.map((r) => {
             const state = sites[`route:${r.name}`];
@@ -550,7 +581,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
       </section>
       {pass && (
         <details className="panel more">
-          <summary>Publish an app instead</summary>
+          <summary>Publish an app instead <Help title="Publish an app">Gives any app running on your network a public address /name/. Enter where it runs on the LAN, like http://10.0.0.225:8080/.</Help></summary>
           <form className="form" onSubmit={newRoute}>
             <label>Name (becomes /name/)<input required pattern="[a-z0-9][a-z0-9-]{0,39}" value={rName} onChange={(e) => setRName(e.target.value.toLowerCase())} placeholder="e.g. notes" /></label>
             <label>App address on the LAN<input required value={rTarget} onChange={(e) => setRTarget(e.target.value)} placeholder="http://10.0.0.225:8080/" /></label>
@@ -585,18 +616,19 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
 
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM</h1><p className="lede">Containers start from a fresh Debian image; VMs are cloned from your VM template.</p></div></header>
+      <header className="hero"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM <Help big title="This page: Create">Make a new guest on Proxmox. A container (LXC) is light and starts in seconds, good for one app or Docker. A VM is a full computer, cloned from your VM template. New guests get the dashboard tag, so you can delete them from the Overview later.</Help></h1><p className="lede">Containers start from a fresh Debian image; VMs are cloned from your VM template.</p></div></header>
       {!pass ? <Login onLogin={onLogin} /> : <form className="panel form" onSubmit={submit}>
         <div className="segmented" role="radiogroup">
+          <Help title="Container or VM">Container: shares the server's Linux kernel, uses little memory, best for most apps. VM: its own operating system, for Windows or anything that needs full isolation.</Help>
           <button type="button" className={type === 'lxc' ? 'on' : ''} onClick={() => setType('lxc')}><Icon name="box" />Container (LXC)</button>
           <button type="button" className={type === 'vm' ? 'on' : ''} onClick={() => setType('vm')}><Icon name="server" />Virtual machine</button>
         </div>
-        <label>Name<input required minLength={2} maxLength={50} pattern="[a-z0-9][a-z0-9-]*" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. paperless" /></label>
-        <div className="row-2">
-          <label>CPU cores<input type="number" min={1} max={8} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
-          <label>Memory (MiB)<input type="number" min={256} max={8192} step={256} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
+        <label><span>Name <Help title="Name">The guest's hostname. Lowercase letters, digits and dashes.</Help></span><input required minLength={2} maxLength={50} pattern="[a-z0-9][a-z0-9-]*" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. paperless" /></label>
+        <div className="pair">
+          <label><span>CPU cores <Help title="CPU cores">How many processor threads it may use. 1–2 is plenty for a small app.</Help></span><input type="number" min={1} max={8} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
+          <label><span>Memory (MiB) <Help title="Memory">RAM in MiB: 1024 = 1 GB. The server has 16 GB shared by everything.</Help></span><input type="number" min={256} max={8192} step={256} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
         </div>
-        <label>Disk (GB)<input type="number" min={2} max={100} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
+        <label><span>Disk (GB) <Help title="Disk">Disk size in GB. It can be grown later in Proxmox, not shrunk.</Help></span><input type="number" min={2} max={100} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
         <button className="primary" disabled={state === 'loading'} type="submit"><Icon name="plus" />{state === 'loading' ? 'Creating…' : `Create ${type === 'lxc' ? 'container' : 'VM'}`}</button>
         {state !== 'idle' && state !== 'loading' && <p className={`message ${state}`}>{message}</p>}
       </form>}
@@ -624,8 +656,15 @@ export function App() {
       if (e.key === 'Escape' && document.activeElement === search.current) { setQuery(''); search.current?.blur(); }
     };
     const clock = window.setInterval(() => setNow(new Date()), 30000);
+    // one pointer position for the whole page: panels light up under the cursor (see .panel in CSS)
+    let raf = 0;
+    const onMove = (e: PointerEvent) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { document.documentElement.style.setProperty('--mx', `${e.clientX}px`); document.documentElement.style.setProperty('--my', `${e.clientY}px`); });
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('hashchange', onHash); window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('hashchange', onHash); window.removeEventListener('keydown', onKey); window.clearInterval(clock); };
+    return () => { window.removeEventListener('hashchange', onHash); window.removeEventListener('keydown', onKey); window.removeEventListener('pointermove', onMove); window.clearInterval(clock); };
   }, []);
 
   const q = query.trim().toLowerCase();
@@ -633,6 +672,7 @@ export function App() {
 
   return (
     <div className="shell">
+      <Backdrop guests={(stats?.guests ?? []).map((g) => ({ id: g.id, status: g.status }))} />
       <aside className="side">
         <a className="brand" href="#/"><span className="logo">HL</span><span>Homelab</span></a>
         <nav>
@@ -641,7 +681,8 @@ export function App() {
           ))}
         </nav>
         <div className="lock">
-          {pass ? <button type="button" className="link-btn" onClick={() => { savePass(''); setPass(''); }}>🔓 Unlocked · lock</button> : <a href="#/provision" className="link-btn">🔒 Locked · unlock</a>}
+          {pass ? <button type="button" className="link-btn" onClick={() => { savePass(''); setPass(''); }}>🔓 Unlocked, press to lock</button> : <a href="#/provision" className="link-btn">🔒 Locked, press to unlock</a>}
+          <Help title="Lock">Unlocked means the main password is remembered in this tab, so you can create, delete, start and stop things. Press to lock again. Closing the tab locks too.</Help>
         </div>
         <div className="side-foot">
           <span className="muted">{now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
@@ -655,12 +696,15 @@ export function App() {
             <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search sites, containers, links…" aria-label="Search" />
             <kbd>/</kbd>
           </label>
+          <Help title="Search">Filters what is on the current page: sites, containers, links and notes. Press / to jump here and Esc to clear.</Help>
         </div>
+        <div className="page" key={page}>
         {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
         {page === 'services' && <Services query={q} sites={sites} />}
         {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
         {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
+        </div>
       </main>
     </div>
   );
