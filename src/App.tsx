@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
 
 // ---------- types ----------
-type Page = 'overview' | 'services' | 'sites' | 'provision';
+type Page = 'overview' | 'services' | 'sites' | 'notes' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
 type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
@@ -13,6 +13,8 @@ type SiteState = { id: string; up: boolean; code: number; ms: number };
 type Site = (typeof config.sites)[number];
 type Route = { name: string; title: string; path: string; kind: string };
 type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
+type Item = { id: string; text: string; at: string; done?: boolean };
+type Notes = { note: string; prompts: Item[]; todos: Item[]; updated: string | null };
 type Job = { state: 'running' | 'done' | 'failed'; kind: 'create' | 'ai'; step: string; error: string; result: JobResult | null };
 
 // ---------- helpers ----------
@@ -21,6 +23,7 @@ const pageForHash = (): Page => {
   if (route === 'services') return 'services';
   if (route === 'sites') return 'sites';
   if (route === 'provision') return 'provision';
+  if (route === 'notes') return 'notes';
   return 'overview';
 };
 const bytes = (n: number) => {
@@ -102,6 +105,9 @@ const Icon = ({ name, className = 'icon' }: { name: string; className?: string }
     disk: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2" /></>,
     spark: <><path d="M12 3c.6 4.6 3.4 7.4 8 8-4.6.6-7.4 3.4-8 8-.6-4.6-3.4-7.4-8-8 4.6-.6 7.4-3.4 8-8Z" /></>,
     send: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
+    note: <><path d="M5 3h10l4 4v14H5z" /><path d="M15 3v4h4" /><path d="M9 12h6M9 16h4" /></>,
+    bookmark: <path d="M6 3h12v18l-6-4-6 4z" />,
+    check: <><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
@@ -286,6 +292,100 @@ const Services = ({ query, sites }: { query: string; sites: Record<string, SiteS
   );
 };
 
+// ---------- notes (saved prompts, to-dos, scratch note), stored on the dashboard server ----------
+const newId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const PROMPT_KEY = 'homelab-use-prompt';
+function useNotes(pass: string) {
+  const [notes, setNotes] = useState<Notes | null>(null);
+  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [error, setError] = useState('');
+  const latest = useRef<Notes | null>(null);
+  useEffect(() => {
+    if (!pass) return;
+    fetch('./api/notes', { headers: { 'x-dashboard-password': pass } })
+      .then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.message || 'Could not load notes.'); latest.current = b; setNotes(b); })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Could not load notes.'));
+  }, [pass]);
+  const save = async (next: Notes) => {
+    latest.current = next; setNotes(next); setState('saving');
+    try {
+      const r = await fetch('./api/notes', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify(next) });
+      const b = await r.json();
+      if (!r.ok) throw new Error(b.message || 'Could not save.');
+      setState(latest.current === next ? 'saved' : 'saving'); setError('');
+    } catch (e) { setState('error'); setError(e instanceof Error ? e.message : 'Could not save.'); }
+  };
+  const update = (change: (n: Notes) => Notes) => { if (latest.current) void save(change(latest.current)); };
+  return { notes, state, error, update };
+}
+
+const NotesPage = ({ query, pass, onLogin }: { query: string; pass: string; onLogin: (p: string) => void }) => {
+  const { notes, state, error, update } = useNotes(pass);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [newPrompt, setNewPrompt] = useState('');
+  const [newTodo, setNewTodo] = useState('');
+  useEffect(() => {
+    if (draft === null || !notes || draft === notes.note) return undefined;
+    const t = window.setTimeout(() => update((n) => ({ ...n, note: draft })), 800);
+    return () => window.clearTimeout(t);
+  }, [draft]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!pass) return (<><header className="hero"><div><p className="eyebrow">Notes</p><h1>Your notes</h1><p className="lede">Saved prompts and to-dos, on the server so they follow you to any device.</p></div></header><Login onLogin={onLogin} /></>);
+  if (!notes) return <p className={error ? 'message error' : 'muted'}>{error || 'Loading notes…'}</p>;
+  const prompts = notes.prompts.filter((p) => matches(query, p.text));
+  const todos = notes.todos.filter((t) => matches(query, t.text));
+  const open = todos.filter((t) => !t.done); const done = todos.filter((t) => t.done);
+  const usePrompt = (text: string) => { try { sessionStorage.setItem(PROMPT_KEY, text); } catch { /* ignore */ } window.location.hash = '#/sites'; };
+  const addPrompt = (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); if (!newPrompt.trim()) return; update((n) => ({ ...n, prompts: [{ id: newId(), text: newPrompt.trim(), at: new Date().toISOString() }, ...n.prompts] })); setNewPrompt(''); };
+  const addTodo = (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); if (!newTodo.trim()) return; update((n) => ({ ...n, todos: [...n.todos, { id: newId(), text: newTodo.trim(), at: new Date().toISOString(), done: false }] })); setNewTodo(''); };
+  const toggle = (id: string) => update((n) => ({ ...n, todos: n.todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) }));
+  const dropTodo = (id: string) => update((n) => ({ ...n, todos: n.todos.filter((t) => t.id !== id) }));
+  const dropPrompt = (id: string) => update((n) => ({ ...n, prompts: n.prompts.filter((p) => p.id !== id) }));
+  const status = state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : state === 'error' ? error : notes.updated ? `Last saved ${new Date(notes.updated).toLocaleString()}` : '';
+  return (
+    <>
+      <header className="hero"><div><p className="eyebrow">Notes</p><h1>Your notes</h1><p className="lede">Saved prompts and to-dos, on the server so they follow you to any device.</p></div><span className={`muted hint ${state === 'error' ? 'bad' : ''}`}>{status}</span></header>
+      <div className="grid-2">
+        <section className="panel">
+          <div className="panel-head"><h2><Icon name="check" />To do</h2><span className="muted">{open.length} open</span></div>
+          <form className="add-row" onSubmit={addTodo}><input value={newTodo} onChange={(e) => setNewTodo(e.target.value)} placeholder="Add a to-do and press Enter" aria-label="New to-do" /><button className="primary" type="submit"><Icon name="plus" /></button></form>
+          <ul className="todo-list">
+            {[...open, ...done].map((t) => (
+              <li key={t.id} className={t.done ? 'done' : ''}>
+                <label><input type="checkbox" checked={!!t.done} onChange={() => toggle(t.id)} /><span>{t.text}</span></label>
+                <button type="button" className="x" aria-label="Delete" onClick={() => dropTodo(t.id)}>×</button>
+              </li>
+            ))}
+            {!todos.length && <li className="muted">Nothing to do. Nice.</li>}
+          </ul>
+          {done.length > 0 && <button type="button" className="link-btn" onClick={() => update((n) => ({ ...n, todos: n.todos.filter((t) => !t.done) }))}>Clear {done.length} done</button>}
+        </section>
+        <section className="panel">
+          <div className="panel-head"><h2><Icon name="bookmark" />Saved prompts</h2><span className="muted">{prompts.length}</span></div>
+          <form className="add-row" onSubmit={addPrompt}><textarea rows={2} value={newPrompt} onChange={(e) => setNewPrompt(e.target.value)} placeholder="Save a prompt for later (website ideas, Gemini tasks…)" aria-label="New prompt" /><button className="primary" type="submit"><Icon name="plus" /></button></form>
+          <ul className="prompt-list">
+            {prompts.map((p) => (
+              <li key={p.id}>
+                <p>{p.text}</p>
+                <div className="prompt-actions">
+                  <span className="muted">{new Date(p.at).toLocaleDateString()}</span>
+                  <button type="button" className="ghost" onClick={() => usePrompt(p.text)}><Icon name="spark" className="icon-xs" />Build site</button>
+                  <button type="button" className="ghost" onClick={() => void navigator.clipboard?.writeText(p.text)}>Copy</button>
+                  <button type="button" className="x" aria-label="Delete" onClick={() => dropPrompt(p.id)}>×</button>
+                </div>
+              </li>
+            ))}
+            {!prompts.length && <li className="muted">No saved prompts yet. Use the bookmark button in the website builder, or add one here.</li>}
+          </ul>
+        </section>
+      </div>
+      <section className="panel">
+        <div className="panel-head"><h2><Icon name="note" />Scratch note</h2><span className="muted">saves as you type</span></div>
+        <textarea className="scratch" rows={8} value={draft ?? notes.note} onChange={(e) => setDraft(e.target.value)} placeholder="Anything: ideas, links, what to ask Claude next…" />
+      </section>
+    </>
+  );
+};
+
 const JOB_KEY = 'homelab-job';
 const readJob = (): { name: string; kind: string } | null => { try { return JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null'); } catch { return null; } };
 const saveJob = (value: { name: string; kind: string } | null) => { try { if (value) sessionStorage.setItem(JOB_KEY, JSON.stringify(value)); else sessionStorage.removeItem(JOB_KEY); } catch { /* private mode */ } };
@@ -307,6 +407,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
   const [rTarget, setRTarget] = useState('http://10.0.0.');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [savedPrompt, setSavedPrompt] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
 
   const call = async (label: string, url: string, init: RequestInit = {}) => {
@@ -319,6 +420,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
     } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.'); return null; } finally { setBusy(''); }
   };
 
+  useEffect(() => { try { const p = sessionStorage.getItem(PROMPT_KEY); if (p) { setPrompt(p); sessionStorage.removeItem(PROMPT_KEY); } } catch { /* ignore */ } }, []);
   useEffect(() => { fetch('./api/ai').then((r) => r.json()).then((b: { ai: boolean }) => setAi(b.ai)).catch(() => setAi(false)); }, []);
   useEffect(() => { if (!nameTouched && !editing) setName(slug(prompt.split(/[.,:\n]/)[0].split(/\s+/).filter((w) => !STOP.has(w.toLowerCase())).slice(0, 2).join(' '))); }, [prompt, nameTouched, editing]);
   useEffect(() => {
@@ -349,6 +451,12 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
     }
     const body = await call('go', './api/wordpress', { method: 'POST', body: JSON.stringify({ name, password: sitePass, prompt: ai ? prompt : '' }) });
     if (body) { follow({ name, kind: 'create' }); setPrompt(''); setName(''); setNameTouched(false); setSitePass(''); }
+  };
+  const bookmark = async () => {
+    const current = await call('mark', './api/notes', { method: 'GET' });
+    if (!current) return;
+    const next = { ...current, prompts: [{ id: newId(), text: prompt.trim(), at: new Date().toISOString() }, ...(current.prompts || [])] };
+    if (await call('mark', './api/notes', { method: 'PUT', body: JSON.stringify(next) })) { setSavedPrompt(true); window.setTimeout(() => setSavedPrompt(false), 2500); }
   };
   const saveKey = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -385,6 +493,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
                 <label className="pill"><span>Password</span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>
               </>
             )}
+            {pass && prompt.trim().length > 3 && <button type="button" className="mark" title="Save this prompt to Notes" aria-label="Save prompt to Notes" disabled={busy === 'mark'} onClick={() => void bookmark()}><Icon name="bookmark" className="icon-xs" />{savedPrompt ? 'Saved' : 'Save'}</button>}
             <button className="send" type="submit" disabled={!pass || !ready || running || !!busy} aria-label={editing ? 'Apply changes' : 'Create website'}>
               {busy === 'go' ? '…' : <><Icon name={editing ? 'spark' : 'send'} />{editing ? 'Apply' : 'Create'}</>}
             </button>
@@ -520,7 +629,7 @@ export function App() {
   }, []);
 
   const q = query.trim().toLowerCase();
-  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['provision', 'Create', 'plus']];
+  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['provision', 'Create', 'plus']];
 
   return (
     <div className="shell">
@@ -550,6 +659,7 @@ export function App() {
         {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
         {page === 'services' && <Services query={q} sites={sites} />}
         {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
+        {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
       </main>
     </div>

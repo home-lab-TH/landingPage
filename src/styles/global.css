@@ -193,6 +193,28 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6p
 .key-form .row input { flex: 1; }
 .more summary { cursor: pointer; font-size: 14px; font-weight: 600; color: #d6e0ee; }
 .more .form { margin-top: 14px; }
+/* ---------- notes ---------- */
+.mark { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: #0b1220; color: #b9c7d8; font-size: 12px; font-weight: 600; }
+.mark:hover { border-color: #3d5a8a; color: var(--text); }
+.mark + .send { margin-left: 0; }
+.add-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.add-row input, .add-row textarea, .scratch { flex: 1; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #0b1220; color: var(--text); font: inherit; font-size: 14px; outline: 0; resize: vertical; }
+.add-row input:focus, .add-row textarea:focus, .scratch:focus { border-color: #2f6b75; box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.08); }
+.add-row .primary { padding: 10px 12px; align-self: flex-start; }
+.todo-list, .prompt-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 2px; }
+.todo-list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; font-size: 14px; }
+.todo-list li:hover, .prompt-list li:hover { background: #0f1724; }
+.todo-list label { flex: 1; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; line-height: 1.45; }
+.todo-list input[type=checkbox] { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.todo-list li.done span { color: var(--muted); text-decoration: line-through; }
+.prompt-list li { padding: 10px 8px; border-radius: 8px; border-bottom: 1px solid var(--line-soft); }
+.prompt-list p { margin: 0 0 8px; font-size: 14px; line-height: 1.5; color: #d6e0ee; white-space: pre-wrap; }
+.prompt-actions { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.prompt-actions .muted { margin-right: auto; }
+.x { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; padding: 0 4px; }
+.x:hover { color: var(--crit); }
+.bad { color: var(--crit); }
+
 @media (max-width: 600px) {
   .pill { flex: 1 1 100%; }
   .pill input { width: 100%; }

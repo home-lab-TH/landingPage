@@ -1,7 +1,7 @@
 import express from 'express';
 import https from 'node:https';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -364,6 +364,39 @@ app.delete('/api/routes/:name', async (request, response) => {
     routeCache.at = 0; siteCache.at = 0;
     return response.json({ deleted: name, kind: route.kind });
   } catch (error) { return fail(response, error); }
+});
+
+// ---------- notes: saved prompts, to-dos and a scratch note (main password) ----------
+// Kept in data/notes.json next to the app; the deploy leaves data/ alone.
+const NOTES_FILE = process.env.NOTES_FILE || path.join(__dirname, 'data', 'notes.json');
+const emptyNotes = () => ({ note: '', prompts: [], todos: [], updated: null });
+const readNotes = () => { try { return { ...emptyNotes(), ...JSON.parse(readFileSync(NOTES_FILE, 'utf8')) }; } catch { return emptyNotes(); } };
+const cleanItems = (list, extra) => (Array.isArray(list) ? list : []).slice(0, 300).map((item) => ({
+  id: String(item?.id || Math.random().toString(36).slice(2)).slice(0, 40),
+  text: String(item?.text || '').slice(0, 4000),
+  at: String(item?.at || new Date().toISOString()).slice(0, 40),
+  ...extra(item),
+})).filter((item) => item.text.trim());
+
+app.get('/api/notes', (request, response) => {
+  if (!unlocked(request, response)) return;
+  response.json(readNotes());
+});
+app.put('/api/notes', (request, response) => {
+  if (!unlocked(request, response)) return;
+  const body = request.body ?? {};
+  const notes = {
+    note: String(body.note ?? '').slice(0, 20000),
+    prompts: cleanItems(body.prompts, () => ({})),
+    todos: cleanItems(body.todos, (item) => ({ done: !!item?.done })),
+    updated: new Date().toISOString(),
+  };
+  try {
+    mkdirSync(path.dirname(NOTES_FILE), { recursive: true });
+    writeFileSync(NOTES_FILE + '.tmp', JSON.stringify(notes, null, 2));
+    renameSync(NOTES_FILE + '.tmp', NOTES_FILE);
+    return response.json(notes);
+  } catch (error) { return response.status(500).json({ message: `Could not save notes: ${error.message}` }); }
 });
 
 // ---------- static site ----------
