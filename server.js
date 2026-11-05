@@ -212,6 +212,29 @@ app.delete('/api/guests/:id', async (request, response) => {
   }
 });
 
+// ---------- start / stop / restart (main password) ----------
+// 102 is Jacob's (never touched). 101 (proxy) and 105 (this dashboard) can restart but not stop.
+const NO_TOUCH = new Set([102]);
+const NO_STOP = new Set([101, 105]);
+const POWER = { start: 'start', stop: 'shutdown', restart: 'reboot' };
+app.post('/api/guests/:id/power/:action', async (request, response) => {
+  if (!guard(request, response)) return undefined;
+  const id = Number(request.params.id); const action = request.params.action;
+  if (!Number.isInteger(id) || !(action in POWER)) return response.status(400).json({ message: 'Bad request.' });
+  if (NO_TOUCH.has(id)) return response.status(403).json({ message: `Guest ${id} is off-limits here.` });
+  if (action === 'stop' && NO_STOP.has(id)) return response.status(403).json({ message: `Guest ${id} can only be restarted, not stopped (the site would go down).` });
+  try {
+    const [lxc, qemu] = await Promise.all([pve(`/nodes/${node()}/lxc`), pve(`/nodes/${node()}/qemu`).catch(() => [])]);
+    const kind = (lxc || []).some((g) => Number(g.vmid) === id) ? 'lxc' : (qemu || []).some((g) => Number(g.vmid) === id) ? 'qemu' : null;
+    if (!kind) return response.status(404).json({ message: `No guest ${id}.` });
+    const task = await pve(`/nodes/${node()}/${kind}/${id}/status/${POWER[action]}`, { method: 'POST', form: action === 'stop' ? { timeout: '60', forceStop: '1' } : undefined });
+    statsCache = { at: 0, data: null };
+    return response.status(202).json({ id, action, task });
+  } catch (error) {
+    return response.status(502).json({ message: error instanceof Error ? error.message : 'Could not reach Proxmox.' });
+  }
+});
+
 // ---------- static site ----------
 app.use(express.static(path.join(__dirname, 'dist')));
 app.use((_request, response) => {

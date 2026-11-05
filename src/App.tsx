@@ -133,6 +133,16 @@ const SetupNotice = ({ message }: { message: string }) => (
 const Overview = ({ query, stats, statsError, sites, pass }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState>; pass: string }) => {
   const [busy, setBusy] = useState<number | null>(null);
   const [note, setNote] = useState('');
+  const power = async (g: Guest, action: 'start' | 'stop' | 'restart') => {
+    if (action !== 'start' && !window.confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${g.name} (${g.id})?`)) return;
+    setBusy(g.id); setNote('');
+    try {
+      const response = await fetch(`./api/guests/${g.id}/power/${action}`, { method: 'POST', headers: { 'x-dashboard-password': pass } });
+      const body: { message?: string } = await response.json();
+      if (!response.ok) throw new Error(body.message || `${action} failed.`);
+      setNote(`${action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'} ${g.name} (${g.id})…`);
+    } catch (e) { setNote(e instanceof Error ? e.message : `${action} failed.`); } finally { setBusy(null); }
+  };
   const remove = async (g: Guest) => {
     if (!window.confirm(`Delete ${g.type.toUpperCase()} ${g.id} (${g.name})? This destroys it and its disk.`)) return;
     setBusy(g.id); setNote('');
@@ -218,7 +228,17 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
                 <span className="cell-bar"><Bar value={mem} /><small>{bytes(g.mem)} / {bytes(g.maxmem)}</small></span>
                 <span className="cell-bar"><Bar value={disk} /><small>{pct(disk)}</small></span>
                 <span className="muted uptime">{g.status === 'running' ? duration(g.uptime) : g.status}
-                  {pass && g.tags?.includes('dashboard') && <button type="button" className="danger" disabled={busy === g.id} onClick={() => void remove(g)}>{busy === g.id ? '…' : 'Delete'}</button>}
+                  {pass && g.id !== 102 && (
+                    <span className="actions">
+                      {g.status === 'running'
+                        ? <>
+                            <button type="button" className="mini" disabled={busy === g.id} onClick={() => void power(g, 'restart')} title="Restart">↻</button>
+                            {g.id !== 101 && g.id !== 105 && <button type="button" className="mini" disabled={busy === g.id} onClick={() => void power(g, 'stop')} title="Stop">■</button>}
+                          </>
+                        : <button type="button" className="mini" disabled={busy === g.id} onClick={() => void power(g, 'start')} title="Start">▶</button>}
+                      {g.tags?.includes('dashboard') && <button type="button" className="danger" disabled={busy === g.id} onClick={() => void remove(g)}>{busy === g.id ? '…' : 'Delete'}</button>}
+                    </span>
+                  )}
                 </span>
               </div>
             );
