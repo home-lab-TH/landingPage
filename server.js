@@ -275,23 +275,78 @@ app.post('/api/routes', async (request, response) => {
   } catch (error) { return fail(response, error); }
 });
 
+const unlocked = (request, response) => {
+  if (!mainPassword()) { response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' }); return false; }
+  if (!passwordOk(request)) { response.status(401).json({ message: 'Wrong password.' }); return false; }
+  return true;
+};
+const SITE_NAME = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
+// Start building a WordPress site (optionally written by Gemini). Runs in the background on the site agent;
+// the page polls /api/wordpress/jobs/:name, which also publishes the route once the site is ready.
 app.post('/api/wordpress', async (request, response) => {
-  if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
-  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  if (!unlocked(request, response)) return;
   const name = String(request.body?.name || '').trim().toLowerCase();
-  const title = String(request.body?.title || '').trim();
+  const { title = '', password = '', prompt = '' } = request.body ?? {};
   try {
-    const site = await siteAgent('POST', '/sites', { name, title }, 300000);
-    try {
-      const target = new URL(process.env.SITE_AGENT_URL); target.port = String(site.port); target.pathname = '/';
-      await proxyAgent('PUT', `/routes/${name}`, { path: `/sites/${name}/`, target: target.toString(), kind: 'wordpress', title: site.title });
-    } catch (error) {
-      await siteAgent('DELETE', `/sites/${name}`).catch(() => {});
-      throw error;
-    }
-    routeCache.at = 0; siteCache.at = 0;
-    return response.status(201).json(site);
+    return response.status(202).json(await siteAgent('POST', '/sites', { name, title: String(title), password: String(password), prompt: String(prompt) }));
   } catch (error) { return fail(response, error); }
+});
+
+const routed = new Set();
+app.get('/api/wordpress/jobs/:name', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const name = request.params.name;
+  if (!SITE_NAME.test(name)) return response.status(400).json({ message: 'Bad name.' });
+  try {
+    const job = await siteAgent('GET', `/jobs/${name}`);
+    if (job.state === 'done' && job.kind === 'create' && !routed.has(name)) {
+      try {
+        const target = new URL(process.env.SITE_AGENT_URL); target.port = String(job.result.port); target.pathname = '/';
+        await proxyAgent('PUT', `/routes/${name}`, { path: `/sites/${name}/`, target: target.toString(), kind: 'wordpress', title: job.result.title });
+        routed.add(name); routeCache.at = 0; siteCache.at = 0;
+      } catch (error) {
+        await siteAgent('DELETE', `/sites/${name}`, undefined, 60000).catch(() => {});
+        return response.json({ ...job, state: 'failed', error: `Could not publish the site: ${error.message}`, result: null });
+      }
+    }
+    return response.json(job);
+  } catch (error) { return fail(response, error); }
+});
+
+// Safety net: publish any finished WordPress site that has no route yet (e.g. the tab was closed mid-build).
+const deleting = new Set();
+const syncSites = async () => {
+  if (!process.env.SITE_AGENT_URL || !process.env.PROXY_AGENT_URL) return;
+  try {
+    const [{ sites = [] }, { routes: have = [] }] = await Promise.all([siteAgent('GET', '/sites'), proxyAgent('GET', '/routes')]);
+    for (const site of sites) {
+      if (site.status === 'building' || deleting.has(site.name) || have.some((r) => r.name === site.name)) continue;
+      const target = new URL(process.env.SITE_AGENT_URL); target.port = String(site.port); target.pathname = '/';
+      await proxyAgent('PUT', `/routes/${site.name}`, { path: `/sites/${site.name}/`, target: target.toString(), kind: 'wordpress', title: site.title });
+      routed.add(site.name); routeCache.at = 0;
+    }
+  } catch { /* agents down: try again next round */ }
+};
+setInterval(syncSites, 30000).unref();
+
+// Ask Gemini to change an existing site ("add a contact page", "make it more formal").
+app.post('/api/wordpress/:name/ai', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const name = request.params.name;
+  if (!SITE_NAME.test(name)) return response.status(400).json({ message: 'Bad name.' });
+  try {
+    return response.status(202).json(await siteAgent('POST', `/sites/${name}/ai`, { prompt: String(request.body?.prompt || '') }));
+  } catch (error) { return fail(response, error); }
+});
+
+// Is a Gemini key saved on the websites server? (yes/no only)
+app.get('/api/ai', async (_request, response) => {
+  try { return response.json({ ai: (await siteAgent('GET', '/ai')).ai }); } catch { return response.json({ ai: false }); }
+});
+app.put('/api/ai/key', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  try { return response.json(await siteAgent('PUT', '/ai/key', { key: String(request.body?.key || '') })); } catch (error) { return fail(response, error); }
 });
 
 app.delete('/api/routes/:name', async (request, response) => {
@@ -301,8 +356,11 @@ app.delete('/api/routes/:name', async (request, response) => {
   try {
     const route = (await proxyAgent('GET', '/routes')).routes.find((r) => r.name === name);
     if (!route) return response.status(404).json({ message: `No site ${name}.` });
-    await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
-    if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+    deleting.add(name);
+    try {
+      await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
+      if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+    } finally { deleting.delete(name); routed.delete(name); }
     routeCache.at = 0; siteCache.at = 0;
     return response.json({ deleted: name, kind: route.kind });
   } catch (error) { return fail(response, error); }

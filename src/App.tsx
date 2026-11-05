@@ -12,7 +12,8 @@ type Stats = { configured: boolean; node: string; host: Host; guests: Guest[]; s
 type SiteState = { id: string; up: boolean; code: number; ms: number };
 type Site = (typeof config.sites)[number];
 type Route = { name: string; title: string; path: string; kind: string };
-type NewSite = { name: string; url: string; admin_url: string; admin_user: string; admin_password: string; plugins: string[] };
+type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
+type Job = { state: 'running' | 'done' | 'failed'; kind: 'create' | 'ai'; step: string; error: string; result: JobResult | null };
 
 // ---------- helpers ----------
 const pageForHash = (): Page => {
@@ -99,6 +100,8 @@ const Icon = ({ name, className = 'icon' }: { name: string; className?: string }
     db: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
     pulse: <path d="M3 12h4l3-8 4 16 3-8h4" />,
     disk: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2" /></>,
+    spark: <><path d="M12 3c.6 4.6 3.4 7.4 8 8-4.6.6-7.4 3.4-8 8-.6-4.6-3.4-7.4-8-8 4.6-.6 7.4-3.4 8-8Z" /></>,
+    send: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
@@ -283,28 +286,73 @@ const Services = ({ query, sites }: { query: string; sites: Record<string, SiteS
   );
 };
 
-const Sites = ({ query, routes, sites, pass, onLogin, reload }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; onLogin: (p: string) => void; reload: () => void }) => {
-  const [wpName, setWpName] = useState('');
-  const [wpTitle, setWpTitle] = useState('');
+const JOB_KEY = 'homelab-job';
+const readJob = (): { name: string; kind: string } | null => { try { return JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null'); } catch { return null; } };
+const saveJob = (value: { name: string; kind: string } | null) => { try { if (value) sessionStorage.setItem(JOB_KEY, JSON.stringify(value)); else sessionStorage.removeItem(JOB_KEY); } catch { /* private mode */ } };
+const slug = (text: string) => text.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 31);
+const STOP = new Set(['a', 'an', 'the', 'site', 'website', 'web', 'page', 'for', 'my', 'our', 'with', 'about', 'of', 'and', 'small', 'simple', 'new', 'i', 'want', 'make', 'me', 'build', 'create']);
+const IDEAS = ['A site for a small bakery with a menu, opening hours and a contact page', 'A portfolio for a student web developer with projects and an about page', 'A page for our school robotics team: who we are, competitions, join us'];
+
+const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; onLogin: (p: string) => void }) => {
+  const [prompt, setPrompt] = useState('');
+  const [name, setName] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
+  const [sitePass, setSitePass] = useState('');
+  const [editing, setEditing] = useState<Route | null>(null);
+  const [ai, setAi] = useState<boolean | null>(null);
+  const [key, setKey] = useState('');
+  const [tracking, setTracking] = useState(readJob);
+  const [job, setJob] = useState<Job | null>(null);
   const [rName, setRName] = useState('');
   const [rTarget, setRTarget] = useState('http://10.0.0.');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [created, setCreated] = useState<NewSite | null>(null);
-  const call = async (label: string, url: string, init: RequestInit) => {
+  const box = useRef<HTMLTextAreaElement>(null);
+
+  const call = async (label: string, url: string, init: RequestInit = {}) => {
     setBusy(label); setError('');
     try {
       const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass } });
       const body = await response.json();
       if (!response.ok) throw new Error(body.message || 'Request failed.');
-      reload();
       return body;
     } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.'); return null; } finally { setBusy(''); }
   };
-  const newWordpress = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setCreated(null);
-    const body = await call('wp', './api/wordpress', { method: 'POST', body: JSON.stringify({ name: wpName, title: wpTitle }) });
-    if (body) { setCreated(body as NewSite); setWpName(''); setWpTitle(''); }
+
+  useEffect(() => { fetch('./api/ai').then((r) => r.json()).then((b: { ai: boolean }) => setAi(b.ai)).catch(() => setAi(false)); }, []);
+  useEffect(() => { if (!nameTouched && !editing) setName(slug(prompt.split(/[.,:\n]/)[0].split(/\s+/).filter((w) => !STOP.has(w.toLowerCase())).slice(0, 2).join(' '))); }, [prompt, nameTouched, editing]);
+  useEffect(() => {
+    if (!tracking || !pass) return undefined;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const response = await fetch(`./api/wordpress/jobs/${tracking.name}`, { headers: { 'x-dashboard-password': pass } });
+        const body = await response.json();
+        if (stop) return;
+        if (!response.ok) { setError(body.message || 'Lost track of the build.'); setTracking(null); saveJob(null); return; }
+        setJob(body as Job);
+        if (body.state !== 'running') { setTracking(null); saveJob(null); }
+      } catch { /* network blip: try again */ }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 2500);
+    return () => { stop = true; window.clearInterval(timer); };
+  }, [tracking, pass]);
+
+  const follow = (target: { name: string; kind: string }) => { setJob({ state: 'running', kind: target.kind as Job['kind'], step: 'Starting', error: '', result: null }); setTracking(target); saveJob(target); };
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (editing) {
+      const body = await call('go', `./api/wordpress/${editing.name}/ai`, { method: 'POST', body: JSON.stringify({ prompt }) });
+      if (body) { follow({ name: editing.name, kind: 'ai' }); setPrompt(''); }
+      return;
+    }
+    const body = await call('go', './api/wordpress', { method: 'POST', body: JSON.stringify({ name, password: sitePass, prompt: ai ? prompt : '' }) });
+    if (body) { follow({ name, kind: 'create' }); setPrompt(''); setName(''); setNameTouched(false); setSitePass(''); }
+  };
+  const saveKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (await call('key', './api/ai/key', { method: 'PUT', body: JSON.stringify({ key }) })) { setAi(true); setKey(''); }
   };
   const newRoute = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -314,10 +362,64 @@ const Sites = ({ query, routes, sites, pass, onLogin, reload }: { query: string;
     const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.` : `Remove the route ${r.path}? The app itself is not touched.`;
     if (window.confirm(msg)) await call(`del:${r.name}`, `./api/routes/${r.name}`, { method: 'DELETE' });
   };
+  const startEdit = (r: Route) => { setEditing(r); setJob(null); window.scrollTo({ top: 0, behavior: 'smooth' }); window.setTimeout(() => box.current?.focus(), 300); };
+
+  const running = !!tracking;
   const shown = routes.filter((r) => matches(query, r.name, r.title, r.path, r.kind));
+  const ready = editing ? prompt.trim().length > 3 : SITE_NAME.test(name) && sitePass.length >= 8;
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Sites</p><h1>Websites on the server</h1><p className="lede">Spin up a WordPress site in about a minute, or publish any app under its own path.</p></div></header>
+      <section className="builder">
+        <p className="eyebrow"><Icon name="spark" className="icon-xs" /> Website builder</p>
+        <h1>{editing ? <>What should change on <span className="grad">{editing.title}</span>?</> : <>What website do you <span className="grad">want</span>?</>}</h1>
+        <form className="ai-box" onSubmit={submit}>
+          <textarea ref={box} rows={3} value={prompt} disabled={running} onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && ready && pass) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
+            placeholder={editing ? 'e.g. Add a contact page and make the home page more friendly' : ai === false ? 'Add your Gemini key below to let AI write the pages. You can still create an empty site.' : 'Describe it: who it is for, which pages, the feel…'} />
+          <div className="ai-row">
+            {editing ? (
+              <span className="chip">Editing /sites/{editing.name}/ <button type="button" aria-label="Stop editing" onClick={() => setEditing(null)}>×</button></span>
+            ) : (
+              <>
+                <label className="pill"><span>Name</span><input value={name} pattern="[a-z0-9][a-z0-9\-]{1,30}" onChange={(e) => { setNameTouched(true); setName(slug(e.target.value)); }} placeholder="bakery" aria-label="Site name" /></label>
+                <label className="pill"><span>Password</span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>
+              </>
+            )}
+            <button className="send" type="submit" disabled={!pass || !ready || running || !!busy} aria-label={editing ? 'Apply changes' : 'Create website'}>
+              {busy === 'go' ? '…' : <><Icon name={editing ? 'spark' : 'send'} />{editing ? 'Apply' : 'Create'}</>}
+            </button>
+          </div>
+        </form>
+        {!editing && !prompt && ai !== false && <div className="ideas">{IDEAS.map((idea) => <button key={idea} type="button" onClick={() => setPrompt(idea)}>{idea}</button>)}</div>}
+        {!editing && name && <p className="muted hint">Address: /sites/{name}/ · log in to WordPress as <code>admin</code> with the password you set.</p>}
+      </section>
+
+      {error && <p className="message error">{error}</p>}
+      {job && (
+        <section className={`panel notice ${job.state === 'failed' ? 'error' : ''}`}>
+          {job.state === 'running' && <><h2><span className="spinner" />{job.step}…</h2><p>{job.kind === 'create' ? 'A new site takes one to two minutes. You can leave this page; it keeps going.' : 'Gemini is rewriting the pages, usually under a minute.'}</p></>}
+          {job.state === 'failed' && <><h2>That did not work</h2><p>{job.error}</p></>}
+          {job.state === 'done' && job.result && (
+            <>
+              <h2>{job.kind === 'create' ? 'Your website is live' : 'Changes published'}</h2>
+              <ol>
+                <li>Site: <a className="link" href={job.result.url} target="_blank" rel="noreferrer">{job.result.url}</a></li>
+                <li>Edit by hand: <a className="link" href={job.result.admin_url} target="_blank" rel="noreferrer">{job.result.admin_url}</a>{job.kind === 'create' && <> · user <code>admin</code>{job.result.admin_password ? <> · password <code>{job.result.admin_password}</code></> : ' · your password'}</>}</li>
+                {job.result.ai_note && <li>The site was created but AI could not write the pages: {job.result.ai_note}. Use “Edit with AI” to try again.</li>}
+              </ol>
+            </>
+          )}
+        </section>
+      )}
+      {!pass && <Login onLogin={onLogin} />}
+      {pass && ai === false && (
+        <form className="panel form key-form" onSubmit={saveKey}>
+          <h2><Icon name="spark" />Connect Gemini</h2>
+          <p className="muted hint">Get a key at aistudio.google.com → Get API key, then paste it here. It is saved on the websites server only, and never shown again.</p>
+          <div className="row"><input type="password" required value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your Gemini API key" autoComplete="off" /><button className="primary" type="submit" disabled={busy === 'key'}>{busy === 'key' ? 'Saving…' : 'Save key'}</button></div>
+        </form>
+      )}
+
       <section className="panel">
         <div className="panel-head"><h2><Icon name="grid" />Your sites</h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
         <ul className="site-list">
@@ -328,7 +430,8 @@ const Sites = ({ query, routes, sites, pass, onLogin, reload }: { query: string;
                 <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
                 <a href={`.${r.path}`}>{r.title}</a>
                 <span className="muted">{r.path} · {r.kind === 'wordpress' ? 'WordPress' : 'app'}</span>
-                {r.kind === 'wordpress' && <a className="link" href={`.${r.path}wp-admin/`} target="_blank" rel="noreferrer">edit</a>}
+                {r.kind === 'wordpress' && pass && ai && <button type="button" className="ghost" disabled={running} onClick={() => startEdit(r)}><Icon name="spark" className="icon-xs" />Edit with AI</button>}
+                {r.kind === 'wordpress' && <a className="link" href={`.${r.path}wp-admin/`} target="_blank" rel="noreferrer">wp-admin</a>}
                 {pass && <button type="button" className="danger" disabled={busy === `del:${r.name}`} onClick={() => void remove(r)}>{busy === `del:${r.name}` ? '…' : 'Delete'}</button>}
               </li>
             );
@@ -336,38 +439,20 @@ const Sites = ({ query, routes, sites, pass, onLogin, reload }: { query: string;
           {!shown.length && <li className="muted">No extra sites yet.</li>}
         </ul>
       </section>
-      {error && <p className="message error">{error}</p>}
-      {created && (
-        <section className="panel notice">
-          <h2>Your new site is ready</h2>
-          <p>Save the password now. It is only shown once.</p>
-          <ol>
-            <li>Site: <a className="link" href={created.url} target="_blank" rel="noreferrer">{created.url}</a></li>
-            <li>Edit it: <a className="link" href={created.admin_url} target="_blank" rel="noreferrer">{created.admin_url}</a></li>
-            <li>User <code>{created.admin_user}</code> · password <code>{created.admin_password}</code></li>
-            {created.plugins.includes('ai-engine') && <li>AI editing: in WordPress open <strong>Meow Apps → AI Engine → Settings</strong>, pick Google, and paste your Gemini key.</li>}
-          </ol>
-        </section>
-      )}
-      {!pass ? <Login onLogin={onLogin} /> : (
-        <div className="grid-2">
-          <form className="panel form" onSubmit={newWordpress}>
-            <h2>New WordPress site</h2>
-            <label>Name (becomes /sites/name/)<input required pattern="[a-z0-9][a-z0-9-]{1,30}" value={wpName} onChange={(e) => setWpName(e.target.value.toLowerCase())} placeholder="e.g. bakery" /></label>
-            <label>Title<input value={wpTitle} onChange={(e) => setWpTitle(e.target.value)} placeholder="e.g. Dana's Bakery" /></label>
-            <button className="primary" disabled={!!busy} type="submit"><Icon name="plus" />{busy === 'wp' ? 'Creating… (about a minute)' : 'Create site'}</button>
-          </form>
-          <form className="panel form" onSubmit={newRoute}>
-            <h2>Publish an app</h2>
+      {pass && (
+        <details className="panel more">
+          <summary>Publish an app instead</summary>
+          <form className="form" onSubmit={newRoute}>
             <label>Name (becomes /name/)<input required pattern="[a-z0-9][a-z0-9-]{0,39}" value={rName} onChange={(e) => setRName(e.target.value.toLowerCase())} placeholder="e.g. notes" /></label>
             <label>App address on the LAN<input required value={rTarget} onChange={(e) => setRTarget(e.target.value)} placeholder="http://10.0.0.225:8080/" /></label>
             <button className="primary" disabled={!!busy} type="submit"><Icon name="plus" />{busy === 'route' ? 'Adding…' : 'Add route'}</button>
           </form>
-        </div>
+        </details>
       )}
     </>
   );
 };
+const SITE_NAME = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
 const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => void }) => {
   const [type, setType] = useState<ProvisionType>('lxc');
@@ -464,7 +549,7 @@ export function App() {
         </div>
         {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
         {page === 'services' && <Services query={q} sites={sites} />}
-        {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} reload={() => undefined} />}
+        {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
       </main>
     </div>
