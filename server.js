@@ -109,29 +109,114 @@ const probe = async (url) => {
     return { up: false, code: 0, ms: Date.now() - started };
   }
 };
-app.get('/api/services', async (_request, response) => {
-  if (Date.now() - siteCache.at < 30000 && siteCache.data) return response.json(siteCache.data);
-  const extra = (await routes()).map((r) => ({ id: `route:${r.name}`, check: `http://10.0.0.250${r.path}` }));
+const UPTIME_FILE = path.join(__dirname, 'data', 'uptime.json');
+const BUCKET = 5 * 60000; const KEEP = 7 * 24 * 12;
+let uptime = (() => { try { return JSON.parse(readFileSync(UPTIME_FILE, 'utf8')); } catch { return {}; } })();
+const record = (results) => {
+  const t = Math.floor(Date.now() / BUCKET) * BUCKET;
+  for (const r of results) {
+    const list = uptime[r.id] ?? (uptime[r.id] = []);
+    let b = list[list.length - 1];
+    if (!b || b.t !== t) { b = { t, ok: 0, n: 0, ms: 0 }; list.push(b); if (list.length > KEEP) list.splice(0, list.length - KEEP); }
+    b.n += 1; if (r.up) { b.ok += 1; b.ms += r.ms; }
+  }
+  try { mkdirSync(path.dirname(UPTIME_FILE), { recursive: true }); writeFileSync(UPTIME_FILE + '.tmp', JSON.stringify(uptime)); renameSync(UPTIME_FILE + '.tmp', UPTIME_FILE); } catch { /* disk full: keep it in memory */ }
+};
+const probeAll = async () => {
+  const extra = (await routes().catch(() => [])).map((r) => ({ id: `route:${r.name}`, check: `http://10.0.0.250${r.path}` }));
   const results = await Promise.all([...services.sites, ...extra].map(async (site) => ({ id: site.id, ...(await probe(site.check)) })));
   siteCache = { at: Date.now(), data: { at: new Date().toISOString(), results } };
-  return response.json(siteCache.data);
+  record(results);
+  return siteCache.data;
+};
+setInterval(() => { probeAll().catch(() => {}); }, 60000).unref();
+app.get('/api/services', async (_request, response) => {
+  if (Date.now() - siteCache.at < 30000 && siteCache.data) return response.json(siteCache.data);
+  return response.json(await probeAll());
+});
+app.get('/api/uptime', (request, response) => {
+  const hours = Math.max(1, Math.min(168, Number(request.query.hours) || 24));
+  const since = Date.now() - hours * 3600000;
+  const out = {};
+  for (const [id, list] of Object.entries(uptime)) {
+    const recent = list.filter((b) => b.t >= since);
+    const n = recent.reduce((a, b) => a + b.n, 0); const ok = recent.reduce((a, b) => a + b.ok, 0);
+    out[id] = { pct: n ? Math.round((ok / n) * 10000) / 100 : null, ms: ok ? Math.round(recent.reduce((a, b) => a + b.ms, 0) / ok) : null, buckets: recent.map((b) => [b.t, b.n ? b.ok / b.n : null, b.ok ? Math.round(b.ms / b.ok) : null]) };
+  }
+  response.json({ hours, sites: out });
+});
+
+// ---------- graphs: Proxmox keeps CPU, memory, network and disk history (RRD) ----------
+const rrdCache = new Map();
+const rrd = async (apiPath, timeframe) => {
+  const key = `${apiPath}|${timeframe}`; const hit = rrdCache.get(key);
+  if (hit && Date.now() - hit.at < 60000) return hit.data;
+  const data = await pve(`${apiPath}/rrddata?timeframe=${timeframe}&cf=AVERAGE`, { read: true });
+  rrdCache.set(key, { at: Date.now(), data });
+  return data;
+};
+const TIMEFRAMES = { hour: 'hour', day: 'day', week: 'week', month: 'month' };
+app.get('/api/history', async (request, response) => {
+  if (!statsConfigured()) return response.status(503).json({ message: 'Proxmox is not configured.' });
+  const tf = TIMEFRAMES[request.query.range] || 'day';
+  try {
+    const rows = await rrd(`/nodes/${node()}`, tf);
+    return response.json({ range: tf, points: (rows || []).filter((r) => r.cpu !== undefined).map((r) => ({
+      t: r.time * 1000, cpu: r.cpu, mem: r.memtotal ? r.memused / r.memtotal : null, load: r.loadavg ?? null,
+      netin: r.netin ?? null, netout: r.netout ?? null, iowait: r.iowait ?? null, root: r.roottotal ? r.rootused / r.roottotal : null,
+    })) });
+  } catch (error) { return response.status(502).json({ message: error.message }); }
+});
+app.get('/api/history/guest/:id', async (request, response) => {
+  if (!statsConfigured()) return response.status(503).json({ message: 'Proxmox is not configured.' });
+  const id = Number(request.params.id); const tf = TIMEFRAMES[request.query.range] || 'day';
+  if (!Number.isInteger(id) || id < 100) return response.status(400).json({ message: 'Bad ID.' });
+  try {
+    const kind = request.query.type === 'vm' ? 'qemu' : 'lxc';
+    const rows = await rrd(`/nodes/${node()}/${kind}/${id}`, tf);
+    return response.json({ range: tf, points: (rows || []).filter((r) => r.cpu !== undefined).map((r) => ({
+      t: r.time * 1000, cpu: r.cpu, mem: r.maxmem ? r.mem / r.maxmem : null, netin: r.netin ?? null, netout: r.netout ?? null,
+    })) });
+  } catch (error) { return response.status(502).json({ message: error.message }); }
 });
 
 // ---------- create / delete (one main password) ----------
 // DASHBOARD_PASSWORD (or the older PROVISION_PASSWORD) unlocks create and delete.
 // Delete only works on guests that carry the "dashboard" tag, i.e. ones this page created.
 const mainPassword = () => process.env.DASHBOARD_PASSWORD || process.env.PROVISION_PASSWORD || '';
+// Wrong passwords are counted per visitor (see visitor()) and in total.
+// 5 misses in 15 minutes lock that visitor out for 15 minutes; 30 misses in total slow everyone to one try per 10 s,
+// so guessing is hopeless but the owner can still get in. Every miss is written to the dashboard log.
+const misses = new Map(); let allMisses = []; let lastSlowTry = 0;
+// the last X-Forwarded-For entry is the one Tailscale's proxy added, so a visitor cannot fake it
+const visitor = (request) => String(request.get('x-forwarded-for') || '').split(',').pop().trim() || request.socket.remoteAddress || '?';
+const lockedOut = (request) => {
+  const now = Date.now(); const m = misses.get(visitor(request));
+  if (m && m.until > now) return Math.ceil((m.until - now) / 1000);
+  allMisses = allMisses.filter((t) => now - t < 15 * 60000);
+  if (allMisses.length >= 30 && now - lastSlowTry < 10000) return Math.ceil((10000 - (now - lastSlowTry)) / 1000);
+  return 0;
+};
 const passwordOk = (request) => {
   const expected = mainPassword();
   const given = request.get('x-dashboard-password') ?? request.get('x-provision-password') ?? '';
-  if (!expected) return false;
+  if (!expected || !given) return false;
+  if (lockedOut(request)) return false;
   const a = Buffer.from(given); const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const ok = a.length === b.length && timingSafeEqual(a, b);
+  const now = Date.now(); const who = visitor(request);
+  if (ok) { misses.delete(who); return true; }
+  const m = misses.get(who) && now - misses.get(who).first < 15 * 60000 ? misses.get(who) : { count: 0, first: now, until: 0 };
+  m.count += 1; if (m.count >= 5) m.until = now + 15 * 60000;
+  misses.set(who, m); allMisses.push(now); lastSlowTry = now;
+  console.warn(`[login] wrong password from ${who} (${m.count} in 15 min${m.until ? ', locked for 15 min' : ''})`);
+  return false;
 };
+const lockMessage = (request) => { const s = lockedOut(request); return s ? `Too many wrong passwords. Try again in ${s > 60 ? `${Math.ceil(s / 60)} min` : `${s} s`}.` : 'Wrong password.'; };
 const guard = (request, response) => {
   if (!mainPassword()) { response.status(503).json({ message: 'Create/delete is off. Set DASHBOARD_PASSWORD in .env on FrontPage.' }); return false; }
   if (!statsConfigured()) { response.status(503).json({ message: 'Proxmox is not configured (PROXMOX_URL, PROXMOX_NODE, token).' }); return false; }
-  if (!passwordOk(request)) { response.status(401).json({ message: 'Wrong password.' }); return false; }
+  if (!passwordOk(request)) { response.status(lockedOut(request) ? 429 : 401).json({ message: lockMessage(request) }); return false; }
   return true;
 };
 const node = () => encodeURIComponent(process.env.PROXMOX_NODE || '');
@@ -148,7 +233,7 @@ const waitTask = async (upid, seconds = 240) => {
 
 app.post('/api/login', (request, response) => {
   if (!mainPassword()) return response.status(503).json({ message: 'No password set on the server yet.' });
-  return passwordOk(request) ? response.json({ ok: true }) : response.status(401).json({ message: 'Wrong password.' });
+  return passwordOk(request) ? response.json({ ok: true }) : response.status(lockedOut(request) ? 429 : 401).json({ message: lockMessage(request) });
 });
 
 // LXC: created from an OS template (PROXMOX_LXC_OSTEMPLATE, e.g. local:vztmpl/debian-13-standard_..._amd64.tar.zst).
@@ -156,6 +241,8 @@ app.post('/api/login', (request, response) => {
 app.post('/api/proxmox/provision', async (request, response) => {
   if (!guard(request, response)) return undefined;
   const { type, name, cores, memory, disk } = request.body ?? {};
+  const loginPassword = String(request.body?.password || '');
+  if (loginPassword && loginPassword.length < 8) return response.status(400).json({ message: 'The login password needs at least 8 characters.' });
   if ((type !== 'vm' && type !== 'lxc') || typeof name !== 'string' || !instanceName.test(name)) return response.status(400).json({ message: 'Use a name with lowercase letters, numbers, and hyphens.' });
   const cpu = Number(cores); const ram = Number(memory); const size = Number(disk ?? 8);
   if (!Number.isInteger(cpu) || cpu < 1 || cpu > 8 || !Number.isInteger(ram) || ram < 256 || ram > 8192 || !Number.isInteger(size) || size < 2 || size > 100) return response.status(400).json({ message: 'Choose 1-8 cores, 256-8192 MiB memory and a 2-100 GB disk.' });
@@ -169,7 +256,7 @@ app.post('/api/proxmox/provision', async (request, response) => {
       const task = await pve(`/nodes/${node()}/lxc`, { method: 'POST', form: {
         vmid: String(newid), hostname: name, ostemplate, cores: String(cpu), memory: String(ram), swap: '512',
         rootfs: `${storage}:${size}`, net0: `name=eth0,bridge=${bridge},ip=dhcp,firewall=1`,
-        unprivileged: '1', features: 'nesting=1', onboot: '1', start: '1', tags: TAG,
+        unprivileged: '1', features: 'nesting=1', onboot: '1', start: '1', tags: TAG, ...(loginPassword ? { password: loginPassword } : {}),
       } });
       response.status(202).json({ id: newid, task });
       waitTask(task).then((s) => console.log(`LXC ${newid} (${name}): ${s}`)).catch((e) => console.error(e));
@@ -182,7 +269,8 @@ app.post('/api/proxmox/provision', async (request, response) => {
     (async () => {
       const state = await waitTask(task);
       if (state !== 'OK') return console.error(`Clone ${newid} failed: ${state}`);
-      await pve(`/nodes/${node()}/qemu/${newid}/config`, { method: 'PUT', form: { cores: String(cpu), memory: String(ram), tags: TAG, onboot: '1' } });
+      await pve(`/nodes/${node()}/qemu/${newid}/config`, { method: 'PUT', form: { cores: String(cpu), memory: String(ram), tags: TAG, onboot: '1', ...(loginPassword ? { cipassword: loginPassword } : {}) } });
+      await pve(`/nodes/${node()}/qemu/${newid}/resize`, { method: 'PUT', form: { disk: 'scsi0', size: `${size}G` } }).catch((e) => console.warn(`VM ${newid}: disk not resized (${e.message})`));
       await pve(`/nodes/${node()}/qemu/${newid}/status/start`, { method: 'POST' });
       console.log(`VM ${newid} (${name}) ready`);
     })().catch((error) => console.error(`VM ${newid} follow-up failed:`, error));
@@ -267,7 +355,7 @@ app.get('/api/routes', async (_request, response) => {
 
 app.post('/api/routes', async (request, response) => {
   if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
-  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  if (!passwordOk(request)) return response.status(lockedOut(request) ? 429 : 401).json({ message: lockMessage(request) });
   const { name, target, title } = request.body ?? {};
   try {
     const route = await proxyAgent('PUT', `/routes/${encodeURIComponent(String(name || ''))}`, { target, title: title || name, kind: 'custom' });
@@ -278,7 +366,7 @@ app.post('/api/routes', async (request, response) => {
 
 const unlocked = (request, response) => {
   if (!mainPassword()) { response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' }); return false; }
-  if (!passwordOk(request)) { response.status(401).json({ message: 'Wrong password.' }); return false; }
+  if (!passwordOk(request)) { response.status(lockedOut(request) ? 429 : 401).json({ message: lockMessage(request) }); return false; }
   return true;
 };
 const SITE_NAME = /^[a-z0-9][a-z0-9-]{1,30}$/;
@@ -288,9 +376,9 @@ const SITE_NAME = /^[a-z0-9][a-z0-9-]{1,30}$/;
 app.post('/api/wordpress', async (request, response) => {
   if (!unlocked(request, response)) return;
   const name = String(request.body?.name || '').trim().toLowerCase();
-  const { title = '', password = '', prompt = '' } = request.body ?? {};
+  const { title = '', password = '', prompt = '', quality = 'fast' } = request.body ?? {};
   try {
-    return response.status(202).json(await siteAgent('POST', '/sites', { name, title: String(title), password: String(password), prompt: String(prompt) }));
+    return response.status(202).json(await siteAgent('POST', '/sites', { name, title: String(title), password: String(password), prompt: String(prompt), quality }));
   } catch (error) { return fail(response, error); }
 });
 
@@ -332,8 +420,10 @@ const syncSites = async () => {
   try {
     const [{ apps = [] }, { routes: have = [] }] = await Promise.all([hostAgent('GET', '/apps'), proxyAgent('GET', '/routes')]);
     for (const a of apps) {
-      if (deleting.has(a.name) || have.some((r) => r.name === a.name)) continue;
-      await proxyAgent('PUT', `/routes/${a.name}`, { target: `http://${a.ip}:${a.port}/`, kind: 'app', title: a.title || a.name });
+      const target = `http://${a.ip}:${a.port}/`;
+      const route = have.find((r) => r.name === a.name);
+      if (deleting.has(a.name) || !a.ip || (route && route.target === target)) continue;
+      await proxyAgent('PUT', `/routes/${a.name}`, { target, kind: a.kind === 'aisite' ? 'aisite' : 'app', title: a.title || a.name });
       routeCache.at = 0;
     }
   } catch { /* host agent down */ }
@@ -346,7 +436,7 @@ app.post('/api/wordpress/:name/ai', async (request, response) => {
   const name = request.params.name;
   if (!SITE_NAME.test(name)) return response.status(400).json({ message: 'Bad name.' });
   try {
-    return response.status(202).json(await siteAgent('POST', `/sites/${name}/ai`, { prompt: String(request.body?.prompt || '') }));
+    return response.status(202).json(await siteAgent('POST', `/sites/${name}/ai`, { prompt: String(request.body?.prompt || ''), quality: request.body?.quality === 'best' ? 'best' : 'fast' }));
   } catch (error) { return fail(response, error); }
 });
 
@@ -361,7 +451,7 @@ app.put('/api/ai/key', async (request, response) => {
 
 app.delete('/api/routes/:name', async (request, response) => {
   if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
-  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  if (!passwordOk(request)) return response.status(lockedOut(request) ? 429 : 401).json({ message: lockMessage(request) });
   const name = request.params.name;
   try {
     const route = (await proxyAgent('GET', '/routes')).routes.find((r) => r.name === name);
@@ -370,7 +460,7 @@ app.delete('/api/routes/:name', async (request, response) => {
     try {
       await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
       if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
-      if (route.kind === 'app') {
+      if (route.kind === 'app' || route.kind === 'aisite') {
         const app = ((await hostAgent('GET', '/apps')).apps || []).find((a) => a.name === name);
         if (app) await hostAgent('DELETE', `/apps/${app.ctid}`, undefined, 120000);
       }
@@ -453,12 +543,64 @@ app.get('/api/activity/:source/:id', async (request, response) => {
   try {
     const job = await (source === 'site' ? siteAgent : hostAgent)('GET', `/jobs/${id}`);
     // a finished app build gets its address published here (and by the 30 s sync as a fallback)
-    if (source === 'host' && job.kind === 'app' && job.state === 'done' && job.result && !routed.has(job.name)) {
-      await proxyAgent('PUT', `/routes/${job.name}`, { target: job.result.target, kind: 'app', title: job.result.title || job.name }).catch(() => {});
+    if (source === 'host' && (job.kind === 'app' || job.kind === 'aisite') && job.state === 'done' && job.result && !routed.has(job.name)) {
+      await proxyAgent('PUT', `/routes/${job.name}`, { target: job.result.target, kind: job.kind === 'aisite' ? 'aisite' : 'app', title: job.result.title || job.name }).catch(() => {});
       routed.add(job.name); routeCache.at = 0;
     }
     return response.json(job);
   } catch (error) { return fail(response, error); }
+});
+
+
+// ---------- AI websites on their own container (host agent; Gemini writes HTML/CSS, nginx serves it) ----------
+app.get('/api/aisites/candidates', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  try { return response.json(await hostAgent('GET', '/aisites/candidates')); } catch (error) { return fail(response, error); }
+});
+app.post('/api/aisites', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const b = request.body ?? {}; const name = String(b.name || '').trim().toLowerCase();
+  if (['sites', 'codezi', 'api', 'assets', 'docker-avi', 'jacobflightmonitor'].includes(name)) return response.status(400).json({ message: `${name} is already used by the server, pick another name.` });
+  if ((await routes()).some((r) => r.name === name)) return response.status(400).json({ message: `A site called ${name} already exists.` });
+  try {
+    return response.status(202).json(await hostAgent('POST', '/aisites', { name, prompt: String(b.prompt || ''), quality: b.quality === 'best' ? 'best' : 'fast', ctid: b.ctid ? Number(b.ctid) : null }));
+  } catch (error) { return fail(response, error); }
+});
+app.post('/api/aisites/:ctid/:action', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const { ctid, action } = request.params;
+  if (!/^\d+$/.test(ctid) || !['edit', 'undo'].includes(action)) return response.status(400).json({ message: 'Bad request.' });
+  try { return response.status(202).json(await hostAgent('POST', `/aisites/${ctid}/${action}`, { prompt: String(request.body?.prompt || ''), quality: request.body?.quality === 'best' ? 'best' : 'fast' })); } catch (error) { return fail(response, error); }
+});
+app.post('/api/wordpress/:name/undo', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const name = request.params.name;
+  if (!SITE_NAME.test(name)) return response.status(400).json({ message: 'Bad name.' });
+  try { return response.status(202).json(await siteAgent('POST', `/sites/${name}/undo`, { job: String(request.body?.job || '') })); } catch (error) { return fail(response, error); }
+});
+
+// ---------- health and updates (host agent) ----------
+app.get('/api/health', async (request, response) => {
+  if (!process.env.HOST_AGENT_URL) return response.status(503).json({ message: 'The host agent is not installed.' });
+  try {
+    const h = await hostAgent('GET', '/health', undefined, 60000);
+    if (passwordOk(request)) return response.json(h);
+    // visitors who are not unlocked see the readings, not the disk serial details
+    return response.json({ ...h, disks: (h.disks || []).map(({ dev, model, size_gb, passed, temp, ssd, state, wear }) => ({ dev, model, size_gb, passed, temp, ssd, state, wear })) });
+  } catch (error) { return fail(response, error); }
+});
+app.get('/api/updates', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  try { return response.json(await hostAgent('GET', '/updates')); } catch (error) { return fail(response, error); }
+});
+app.post('/api/updates/check', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  try { return response.status(202).json(await hostAgent('POST', '/updates/check')); } catch (error) { return fail(response, error); }
+});
+app.post('/api/updates/apply', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const targets = (Array.isArray(request.body?.targets) ? request.body.targets : []).map(Number).filter((t) => Number.isInteger(t) && t >= 100 && t !== 102);
+  try { return response.status(202).json(await hostAgent('POST', '/updates/apply', { targets })); } catch (error) { return fail(response, error); }
 });
 
 // ---------- logs ----------
