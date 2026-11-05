@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
 
 // ---------- types ----------
-type Page = 'overview' | 'services' | 'provision';
+type Page = 'overview' | 'services' | 'sites' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
 type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
@@ -11,11 +11,14 @@ type Storage = { name: string; type: string; used: number; total: number };
 type Stats = { configured: boolean; node: string; host: Host; guests: Guest[]; storage: Storage[]; at: string };
 type SiteState = { id: string; up: boolean; code: number; ms: number };
 type Site = (typeof config.sites)[number];
+type Route = { name: string; title: string; path: string; kind: string };
+type NewSite = { name: string; url: string; admin_url: string; admin_user: string; admin_password: string; plugins: string[] };
 
 // ---------- helpers ----------
 const pageForHash = (): Page => {
   const route = window.location.hash.replace(/^#\/?/, '');
   if (route === 'services') return 'services';
+  if (route === 'sites') return 'sites';
   if (route === 'provision') return 'provision';
   return 'overview';
 };
@@ -280,6 +283,92 @@ const Services = ({ query, sites }: { query: string; sites: Record<string, SiteS
   );
 };
 
+const Sites = ({ query, routes, sites, pass, onLogin, reload }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; onLogin: (p: string) => void; reload: () => void }) => {
+  const [wpName, setWpName] = useState('');
+  const [wpTitle, setWpTitle] = useState('');
+  const [rName, setRName] = useState('');
+  const [rTarget, setRTarget] = useState('http://10.0.0.');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [created, setCreated] = useState<NewSite | null>(null);
+  const call = async (label: string, url: string, init: RequestInit) => {
+    setBusy(label); setError('');
+    try {
+      const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass } });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.message || 'Request failed.');
+      reload();
+      return body;
+    } catch (e) { setError(e instanceof Error ? e.message : 'Request failed.'); return null; } finally { setBusy(''); }
+  };
+  const newWordpress = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setCreated(null);
+    const body = await call('wp', './api/wordpress', { method: 'POST', body: JSON.stringify({ name: wpName, title: wpTitle }) });
+    if (body) { setCreated(body as NewSite); setWpName(''); setWpTitle(''); }
+  };
+  const newRoute = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (await call('route', './api/routes', { method: 'POST', body: JSON.stringify({ name: rName, target: rTarget, title: rName }) })) { setRName(''); setRTarget('http://10.0.0.'); }
+  };
+  const remove = async (r: Route) => {
+    const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.` : `Remove the route ${r.path}? The app itself is not touched.`;
+    if (window.confirm(msg)) await call(`del:${r.name}`, `./api/routes/${r.name}`, { method: 'DELETE' });
+  };
+  const shown = routes.filter((r) => matches(query, r.name, r.title, r.path, r.kind));
+  return (
+    <>
+      <header className="hero"><div><p className="eyebrow">Sites</p><h1>Websites on the server</h1><p className="lede">Spin up a WordPress site in about a minute, or publish any app under its own path.</p></div></header>
+      <section className="panel">
+        <div className="panel-head"><h2><Icon name="grid" />Your sites</h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
+        <ul className="site-list">
+          {shown.map((r) => {
+            const state = sites[`route:${r.name}`];
+            return (
+              <li key={r.name}>
+                <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
+                <a href={`.${r.path}`}>{r.title}</a>
+                <span className="muted">{r.path} · {r.kind === 'wordpress' ? 'WordPress' : 'app'}</span>
+                {r.kind === 'wordpress' && <a className="link" href={`.${r.path}wp-admin/`} target="_blank" rel="noreferrer">edit</a>}
+                {pass && <button type="button" className="danger" disabled={busy === `del:${r.name}`} onClick={() => void remove(r)}>{busy === `del:${r.name}` ? '…' : 'Delete'}</button>}
+              </li>
+            );
+          })}
+          {!shown.length && <li className="muted">No extra sites yet.</li>}
+        </ul>
+      </section>
+      {error && <p className="message error">{error}</p>}
+      {created && (
+        <section className="panel notice">
+          <h2>Your new site is ready</h2>
+          <p>Save the password now. It is only shown once.</p>
+          <ol>
+            <li>Site: <a className="link" href={created.url} target="_blank" rel="noreferrer">{created.url}</a></li>
+            <li>Edit it: <a className="link" href={created.admin_url} target="_blank" rel="noreferrer">{created.admin_url}</a></li>
+            <li>User <code>{created.admin_user}</code> · password <code>{created.admin_password}</code></li>
+            {created.plugins.includes('ai-engine') && <li>AI editing: in WordPress open <strong>Meow Apps → AI Engine → Settings</strong>, pick Google, and paste your Gemini key.</li>}
+          </ol>
+        </section>
+      )}
+      {!pass ? <Login onLogin={onLogin} /> : (
+        <div className="grid-2">
+          <form className="panel form" onSubmit={newWordpress}>
+            <h2>New WordPress site</h2>
+            <label>Name (becomes /sites/name/)<input required pattern="[a-z0-9][a-z0-9-]{1,30}" value={wpName} onChange={(e) => setWpName(e.target.value.toLowerCase())} placeholder="e.g. bakery" /></label>
+            <label>Title<input value={wpTitle} onChange={(e) => setWpTitle(e.target.value)} placeholder="e.g. Dana's Bakery" /></label>
+            <button className="primary" disabled={!!busy} type="submit"><Icon name="plus" />{busy === 'wp' ? 'Creating… (about a minute)' : 'Create site'}</button>
+          </form>
+          <form className="panel form" onSubmit={newRoute}>
+            <h2>Publish an app</h2>
+            <label>Name (becomes /name/)<input required pattern="[a-z0-9][a-z0-9-]{0,39}" value={rName} onChange={(e) => setRName(e.target.value.toLowerCase())} placeholder="e.g. notes" /></label>
+            <label>App address on the LAN<input required value={rTarget} onChange={(e) => setRTarget(e.target.value)} placeholder="http://10.0.0.225:8080/" /></label>
+            <button className="primary" disabled={!!busy} type="submit"><Icon name="plus" />{busy === 'route' ? 'Adding…' : 'Add route'}</button>
+          </form>
+        </div>
+      )}
+    </>
+  );
+};
+
 const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => void }) => {
   const [type, setType] = useState<ProvisionType>('lxc');
   const [name, setName] = useState('');
@@ -330,6 +419,7 @@ export function App() {
   const search = useRef<HTMLInputElement>(null);
   const { data: stats, error: statsError } = usePoll<Stats>('./api/stats', 5000);
   const { data: siteData } = usePoll<{ results: SiteState[] }>('./api/services', 30000);
+  const { data: routeData } = usePoll<{ routes: Route[] }>('./api/routes', 30000);
   const sites = useMemo(() => Object.fromEntries((siteData?.results ?? []).map((r) => [r.id, r])), [siteData]);
 
   useEffect(() => {
@@ -345,7 +435,7 @@ export function App() {
   }, []);
 
   const q = query.trim().toLowerCase();
-  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['provision', 'Create', 'plus']];
+  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['provision', 'Create', 'plus']];
 
   return (
     <div className="shell">
@@ -374,6 +464,7 @@ export function App() {
         </div>
         {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
         {page === 'services' && <Services query={q} sites={sites} />}
+        {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} reload={() => undefined} />}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
       </main>
     </div>

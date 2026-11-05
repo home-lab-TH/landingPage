@@ -111,7 +111,8 @@ const probe = async (url) => {
 };
 app.get('/api/services', async (_request, response) => {
   if (Date.now() - siteCache.at < 30000 && siteCache.data) return response.json(siteCache.data);
-  const results = await Promise.all(services.sites.map(async (site) => ({ id: site.id, ...(await probe(site.check)) })));
+  const extra = (await routes()).map((r) => ({ id: `route:${r.name}`, check: `http://10.0.0.250${r.path}` }));
+  const results = await Promise.all([...services.sites, ...extra].map(async (site) => ({ id: site.id, ...(await probe(site.check)) })));
   siteCache = { at: Date.now(), data: { at: new Date().toISOString(), results } };
   return response.json(siteCache.data);
 });
@@ -233,6 +234,78 @@ app.post('/api/guests/:id/power/:action', async (request, response) => {
   } catch (error) {
     return response.status(502).json({ message: error instanceof Error ? error.message : 'Could not reach Proxmox.' });
   }
+});
+
+// ---------- sites: proxy routes + WordPress sites (via the two LAN agents) ----------
+const agent = async (base, token, method, path, body, timeoutMs = 20000) => {
+  if (!base || !token) throw Object.assign(new Error('Sites are not set up yet (agent URL/token missing in .env).'), { status: 503 });
+  const response = await fetch(base.replace(/\/$/, '') + path, {
+    method, signal: AbortSignal.timeout(timeoutMs),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.message || `Agent answered ${response.status}`), { status: response.status });
+  return data;
+};
+const proxyAgent = (method, path, body) => agent(process.env.PROXY_AGENT_URL, process.env.PROXY_AGENT_TOKEN, method, path, body);
+const siteAgent = (method, path, body, ms) => agent(process.env.SITE_AGENT_URL, process.env.SITE_AGENT_TOKEN, method, path, body, ms);
+const fail = (response, error) => response.status(error.status && error.status < 600 ? (error.status === 401 ? 502 : error.status) : 502).json({ message: error.message || 'Agent not reachable.' });
+
+let routeCache = { at: 0, data: [] };
+const routes = async () => {
+  if (Date.now() - routeCache.at < 15000) return routeCache.data;
+  try { routeCache = { at: Date.now(), data: (await proxyAgent('GET', '/routes')).routes || [] }; } catch { routeCache = { at: Date.now(), data: [] }; }
+  return routeCache.data;
+};
+
+// Public: which extra sites exist (no internal addresses).
+app.get('/api/routes', async (_request, response) => {
+  response.json({ routes: (await routes()).map((r) => ({ name: r.name, title: r.title, path: r.path, kind: r.kind })) });
+});
+
+app.post('/api/routes', async (request, response) => {
+  if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
+  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  const { name, target, title } = request.body ?? {};
+  try {
+    const route = await proxyAgent('PUT', `/routes/${encodeURIComponent(String(name || ''))}`, { target, title: title || name, kind: 'custom' });
+    routeCache.at = 0; siteCache.at = 0;
+    return response.json(route);
+  } catch (error) { return fail(response, error); }
+});
+
+app.post('/api/wordpress', async (request, response) => {
+  if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
+  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  const name = String(request.body?.name || '').trim().toLowerCase();
+  const title = String(request.body?.title || '').trim();
+  try {
+    const site = await siteAgent('POST', '/sites', { name, title }, 300000);
+    try {
+      const target = new URL(process.env.SITE_AGENT_URL); target.port = String(site.port); target.pathname = '/';
+      await proxyAgent('PUT', `/routes/${name}`, { path: `/sites/${name}/`, target: target.toString(), kind: 'wordpress', title: site.title });
+    } catch (error) {
+      await siteAgent('DELETE', `/sites/${name}`).catch(() => {});
+      throw error;
+    }
+    routeCache.at = 0; siteCache.at = 0;
+    return response.status(201).json(site);
+  } catch (error) { return fail(response, error); }
+});
+
+app.delete('/api/routes/:name', async (request, response) => {
+  if (!mainPassword()) return response.status(503).json({ message: 'Set DASHBOARD_PASSWORD first.' });
+  if (!passwordOk(request)) return response.status(401).json({ message: 'Wrong password.' });
+  const name = request.params.name;
+  try {
+    const route = (await proxyAgent('GET', '/routes')).routes.find((r) => r.name === name);
+    if (!route) return response.status(404).json({ message: `No site ${name}.` });
+    await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
+    if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+    routeCache.at = 0; siteCache.at = 0;
+    return response.json({ deleted: name, kind: route.kind });
+  } catch (error) { return fail(response, error); }
 });
 
 // ---------- static site ----------
