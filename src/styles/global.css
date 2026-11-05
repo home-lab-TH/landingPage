@@ -169,6 +169,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6p
 .site-list li { display: flex; align-items: center; gap: 10px; padding: 10px 10px; border-radius: 11px; font-size: 14px; transition: background .2s; }
 .site-list li:hover { background: rgba(146, 164, 255, 0.06); }
 .site-list a { flex: 1; font-weight: 500; }
+.site-list a.link { flex: none; font-weight: 400; }
 .site-list .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
 .storage { margin-bottom: 14px; }
 .row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; font-size: 13px; }
