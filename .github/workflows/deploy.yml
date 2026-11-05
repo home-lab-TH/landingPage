@@ -1,0 +1,56 @@
+name: Deploy to FrontPage
+
+# Build on GitHub's machines (FrontPage has 512 MB RAM), then the self-hosted
+# runner on FrontPage (CT 105) installs runtime deps and restarts pm2.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontpage
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: |
+            dist/
+            server.js
+            package.json
+            package-lock.json
+          retention-days: 3
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, frontpage]
+    env:
+      APP_DIR: /opt/landingPage
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site
+      - name: Install
+        run: |
+          [ -w "$APP_DIR" ] || { echo "$APP_DIR must be owned by $(whoami)"; exit 1; }
+          rsync -a --delete --exclude='.env' --exclude='node_modules/' site/ "$APP_DIR/"
+          cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund
+      - name: Restart
+        working-directory: /opt/landingPage
+        run: |
+          if pm2 describe landing-page > /dev/null 2>&1; then pm2 restart landing-page --update-env; else pm2 start npm --name landing-page -- start; fi
+          pm2 save
+          for i in $(seq 1 10); do curl -fsS http://localhost:3000/api/health > /dev/null && { echo healthy; exit 0; }; sleep 2; done
+          pm2 logs landing-page --lines 30 --nostream; exit 1
