@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,7 +16,18 @@ app.get('/api/health', (_request, response) => {
 const requiredProxmoxSettings = ['PROXMOX_URL', 'PROXMOX_TOKEN_ID', 'PROXMOX_TOKEN_SECRET', 'PROXMOX_NODE'];
 const instanceName = /^[a-z0-9][a-z0-9-]{1,49}$/;
 
+// Provisioning is off unless PROVISION_PASSWORD is set, and every request must send it.
+const provisionAllowed = (request) => {
+  const expected = process.env.PROVISION_PASSWORD;
+  const given = request.get('x-provision-password') ?? '';
+  if (!expected) return false;
+  const a = Buffer.from(given); const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
 app.post('/api/proxmox/provision', async (request, response) => {
+  if (!process.env.PROVISION_PASSWORD) return response.status(503).json({ message: 'Provisioning is disabled. Set PROVISION_PASSWORD on the server to enable it.' });
+  if (!provisionAllowed(request)) return response.status(401).json({ message: 'Wrong provisioning password.' });
   const { type, name, cores, memory } = request.body ?? {};
   const missing = requiredProxmoxSettings.filter((setting) => !process.env[setting]);
   const templateSetting = type === 'vm' ? 'PROXMOX_VM_TEMPLATE' : 'PROXMOX_LXC_TEMPLATE';
