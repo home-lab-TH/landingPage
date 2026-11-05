@@ -5,7 +5,7 @@ import config from './config/services.json';
 // ---------- types ----------
 type Page = 'overview' | 'services' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
-type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number };
+type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
 type Storage = { name: string; type: string; used: number; total: number };
 type Stats = { configured: boolean; node: string; host: Host; guests: Guest[]; storage: Storage[]; at: string };
@@ -34,6 +34,33 @@ const duration = (s: number) => {
 };
 const level = (r: number) => (r >= 0.9 ? 'crit' : r >= 0.75 ? 'warn' : 'ok');
 const matches = (query: string, ...fields: (string | number)[]) => !query || fields.join(' ').toLowerCase().includes(query);
+
+const PASS_KEY = 'homelab-pass';
+const readPass = () => { try { return sessionStorage.getItem(PASS_KEY) || ''; } catch { return ''; } };
+const savePass = (value: string) => { try { if (value) sessionStorage.setItem(PASS_KEY, value); else sessionStorage.removeItem(PASS_KEY); } catch { /* private mode */ } };
+
+const Login = ({ onLogin }: { onLogin: (pass: string) => void }) => {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState('');
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setError('');
+    try {
+      const response = await fetch('./api/login', { method: 'POST', headers: { 'x-dashboard-password': value } });
+      const body: { message?: string } = await response.json();
+      if (!response.ok) throw new Error(body.message || 'Wrong password.');
+      savePass(value); onLogin(value);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Login failed.'); }
+  };
+  return (
+    <form className="panel form login" onSubmit={submit}>
+      <h2>Unlock create and delete</h2>
+      <p className="muted">Enter the main password. It stays in this browser tab until you close it.</p>
+      <label>Password<input type="password" required autoComplete="current-password" value={value} onChange={(e) => setValue(e.target.value)} /></label>
+      <button className="primary" type="submit">Unlock</button>
+      {error && <p className="message error">{error}</p>}
+    </form>
+  );
+};
 
 function usePoll<T>(url: string, ms: number) {
   const [data, setData] = useState<T | null>(null);
@@ -103,7 +130,19 @@ const SetupNotice = ({ message }: { message: string }) => (
   </section>
 );
 
-const Overview = ({ query, stats, statsError, sites }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState> }) => {
+const Overview = ({ query, stats, statsError, sites, pass }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState>; pass: string }) => {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+  const remove = async (g: Guest) => {
+    if (!window.confirm(`Delete ${g.type.toUpperCase()} ${g.id} (${g.name})? This destroys it and its disk.`)) return;
+    setBusy(g.id); setNote('');
+    try {
+      const response = await fetch(`./api/guests/${g.id}`, { method: 'DELETE', headers: { 'x-dashboard-password': pass } });
+      const body: { message?: string } = await response.json();
+      if (!response.ok) throw new Error(body.message || 'Delete failed.');
+      setNote(`Deleting ${g.name} (${g.id})… it disappears from the list in a few seconds.`);
+    } catch (e) { setNote(e instanceof Error ? e.message : 'Delete failed.'); } finally { setBusy(null); }
+  };
   const guests = (stats?.guests ?? []).filter((g) => matches(query, g.name, g.id, g.type, g.status));
   const db = stats?.guests.find((g) => g.id === 106);
   const running = stats?.guests.filter((g) => g.status === 'running').length ?? 0;
@@ -167,6 +206,7 @@ const Overview = ({ query, stats, statsError, sites }: { query: string; stats: S
       <section className="panel">
         <div className="panel-head"><h2><Icon name="box" />Containers and VMs</h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
         <div className="table">
+          {note && <p className="message success">{note}</p>}
           <div className="tr th"><span>ID</span><span>Name</span><span>CPU</span><span>Memory</span><span>Disk</span><span>Uptime</span></div>
           {guests.map((g) => {
             const mem = ratio(g.mem, g.maxmem); const disk = ratio(g.disk, g.maxdisk);
@@ -177,7 +217,9 @@ const Overview = ({ query, stats, statsError, sites }: { query: string; stats: S
                 <span className="mono">{pct(g.cpu)}</span>
                 <span className="cell-bar"><Bar value={mem} /><small>{bytes(g.mem)} / {bytes(g.maxmem)}</small></span>
                 <span className="cell-bar"><Bar value={disk} /><small>{pct(disk)}</small></span>
-                <span className="muted">{g.status === 'running' ? duration(g.uptime) : g.status}</span>
+                <span className="muted uptime">{g.status === 'running' ? duration(g.uptime) : g.status}
+                  {pass && g.tags?.includes('dashboard') && <button type="button" className="danger" disabled={busy === g.id} onClick={() => void remove(g)}>{busy === g.id ? '…' : 'Delete'}</button>}
+                </span>
               </div>
             );
           })}
@@ -218,12 +260,12 @@ const Services = ({ query, sites }: { query: string; sites: Record<string, SiteS
   );
 };
 
-const Provision = () => {
+const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => void }) => {
   const [type, setType] = useState<ProvisionType>('lxc');
   const [name, setName] = useState('');
   const [cores, setCores] = useState(2);
   const [memory, setMemory] = useState(2048);
-  const [password, setPassword] = useState('');
+  const [disk, setDisk] = useState(8);
   const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
 
@@ -231,30 +273,30 @@ const Provision = () => {
     event.preventDefault();
     setState('loading'); setMessage('');
     try {
-      const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-provision-password': password }, body: JSON.stringify({ type, name, cores, memory }) });
+      const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify({ type, name, cores, memory, disk }) });
       const data: { message?: string; task?: string; id?: number } = await response.json();
       if (!response.ok) throw new Error(data.message || 'Proxmox did not accept the request.');
-      setState('success'); setMessage(`Creating ${type.toUpperCase()} ${data.id ?? ''}. CPU and memory are applied when the clone finishes.`);
+      setState('success'); setMessage(`Creating ${type.toUpperCase()} ${data.id ?? ''} (${name}). It shows up on the Overview in a minute; delete it there if you don't need it.`);
     } catch (error) { setState('error'); setMessage(error instanceof Error ? error.message : 'Unable to reach the provisioning service.'); }
   };
 
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM</h1><p className="lede">Clones one of your templates. Needs the provisioning password.</p></div></header>
-      <form className="panel form" onSubmit={submit}>
+      <header className="hero"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM</h1><p className="lede">Containers start from a fresh Debian image; VMs are cloned from your VM template.</p></div></header>
+      {!pass ? <Login onLogin={onLogin} /> : <form className="panel form" onSubmit={submit}>
         <div className="segmented" role="radiogroup">
           <button type="button" className={type === 'lxc' ? 'on' : ''} onClick={() => setType('lxc')}><Icon name="box" />Container (LXC)</button>
           <button type="button" className={type === 'vm' ? 'on' : ''} onClick={() => setType('vm')}><Icon name="server" />Virtual machine</button>
         </div>
         <label>Name<input required minLength={2} maxLength={50} pattern="[a-z0-9][a-z0-9-]*" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. paperless" /></label>
         <div className="row-2">
-          <label>CPU cores<input type="number" min={1} max={16} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
-          <label>Memory (MiB)<input type="number" min={512} max={32768} step={512} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
+          <label>CPU cores<input type="number" min={1} max={8} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
+          <label>Memory (MiB)<input type="number" min={256} max={8192} step={256} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
         </div>
-        <label>Provisioning password<input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label>Disk (GB)<input type="number" min={2} max={100} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
         <button className="primary" disabled={state === 'loading'} type="submit"><Icon name="plus" />{state === 'loading' ? 'Creating…' : `Create ${type === 'lxc' ? 'container' : 'VM'}`}</button>
         {state !== 'idle' && state !== 'loading' && <p className={`message ${state}`}>{message}</p>}
-      </form>
+      </form>}
     </>
   );
 };
@@ -263,6 +305,7 @@ const Provision = () => {
 export function App() {
   const [page, setPage] = useState<Page>(pageForHash);
   const [query, setQuery] = useState('');
+  const [pass, setPass] = useState(readPass);
   const [now, setNow] = useState(() => new Date());
   const search = useRef<HTMLInputElement>(null);
   const { data: stats, error: statsError } = usePoll<Stats>('./api/stats', 5000);
@@ -293,6 +336,9 @@ export function App() {
             <a key={id} href={`#/${id === 'overview' ? '' : id}`} className={page === id ? 'active' : ''}><Icon name={icon} />{label}</a>
           ))}
         </nav>
+        <div className="lock">
+          {pass ? <button type="button" className="link-btn" onClick={() => { savePass(''); setPass(''); }}>🔓 Unlocked · lock</button> : <a href="#/provision" className="link-btn">🔒 Locked · unlock</a>}
+        </div>
         <div className="side-foot">
           <span className="muted">{now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
           <strong>{now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</strong>
@@ -306,9 +352,9 @@ export function App() {
             <kbd>/</kbd>
           </label>
         </div>
-        {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} />}
+        {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
         {page === 'services' && <Services query={q} sites={sites} />}
-        {page === 'provision' && <Provision />}
+        {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
       </main>
     </div>
   );
