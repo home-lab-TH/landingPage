@@ -46,7 +46,7 @@ jobs:
       - name: Install
         run: |
           [ -w "$APP_DIR" ] || { echo "$APP_DIR must be owned by $(whoami)"; exit 1; }
-          rsync -a --delete --exclude='.env' --exclude='node_modules/' site/ "$APP_DIR/"
+          rsync -a --delete --exclude='.env' --exclude='node_modules/' --exclude='data/' site/ "$APP_DIR/"
           cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund
       - name: Restart
         working-directory: /opt/landingPage
