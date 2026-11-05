@@ -3,9 +3,11 @@ import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
 import { Help } from './ui/Help';
 import { Backdrop } from './ui/Backdrop';
+import { DeployApp, History, LogBox, LogsPage } from './ui/Ops';
+import type { AppInfo } from './ui/Ops';
 
 // ---------- types ----------
-type Page = 'overview' | 'services' | 'sites' | 'notes' | 'provision';
+type Page = 'overview' | 'services' | 'sites' | 'notes' | 'logs' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
 type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
@@ -17,7 +19,7 @@ type Route = { name: string; title: string; path: string; kind: string };
 type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
 type Item = { id: string; text: string; at: string; done?: boolean };
 type Notes = { note: string; prompts: Item[]; todos: Item[]; updated: string | null };
-type Job = { state: 'running' | 'done' | 'failed'; kind: 'create' | 'ai'; step: string; error: string; result: JobResult | null };
+type Job = { state: 'running' | 'done' | 'failed'; kind: 'create' | 'ai'; step: string; error: string; result: JobResult | null; log?: string[] };
 
 // ---------- helpers ----------
 const pageForHash = (): Page => {
@@ -26,6 +28,7 @@ const pageForHash = (): Page => {
   if (route === 'sites') return 'sites';
   if (route === 'provision') return 'provision';
   if (route === 'notes') return 'notes';
+  if (route === 'logs' || route.startsWith('logs/')) return 'logs';
   return 'overview';
 };
 const bytes = (n: number) => {
@@ -109,6 +112,7 @@ const Icon = ({ name, className = 'icon' }: { name: string; className?: string }
     send: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
     note: <><path d="M5 3h10l4 4v14H5z" /><path d="M15 3v4h4" /><path d="M9 12h6M9 16h4" /></>,
     bookmark: <path d="M6 3h12v18l-6-4-6 4z" />,
+    list: <><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></>,
     check: <><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
@@ -251,7 +255,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
       </div>
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="box" />Containers and VMs <Help title="Containers and VMs">Every guest on the server with its CPU, memory and disk use. Once unlocked: ↻ restarts, ■ stops and ▶ starts (stop and restart ask first). Delete only shows on guests made from this dashboard. Jacob's app (102) is never touched, and the proxy (101) and this dashboard (105) can't be stopped from here.</Help></h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
+        <div className="panel-head"><h2><Icon name="box" />Containers and VMs <Help title="Containers and VMs">Every guest on the server with its CPU, memory and disk use. Once unlocked: ≡ opens its logs, ↻ restarts, ■ stops and ▶ starts (stop and restart ask first). Delete only shows on guests made from this dashboard. Jacob's app (102) is never touched, and the proxy (101) and this dashboard (105) can't be stopped from here.</Help></h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
         <div className="table">
           {note && <p className="message success">{note}</p>}
           <div className="tr th"><span>ID</span><span>Name</span><span>CPU</span><span>Memory</span><span>Disk</span><span>Uptime</span></div>
@@ -267,6 +271,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
                 <span className="muted uptime">{g.status === 'running' ? duration(g.uptime) : g.status}
                   {pass && g.id !== 102 && (
                     <span className="actions">
+                      <a className="mini" href={`#/logs/ct-${g.id}`} title="Logs">≡</a>
                       {g.status === 'running'
                         ? <>
                             <button type="button" className="mini" disabled={busy === g.id} onClick={() => void power(g, 'restart')} title="Restart">↻</button>
@@ -433,6 +438,9 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [savedPrompt, setSavedPrompt] = useState(false);
+  const [apps, setApps] = useState<AppInfo[]>([]);
+  const loadApps = () => { if (pass) fetch('./api/apps', { headers: { 'x-dashboard-password': pass } }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); };
+  useEffect(loadApps, [pass]); // eslint-disable-line react-hooks/exhaustive-deps
   const box = useRef<HTMLTextAreaElement>(null);
 
   const call = async (label: string, url: string, init: RequestInit = {}) => {
@@ -492,7 +500,8 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
     if (await call('route', './api/routes', { method: 'POST', body: JSON.stringify({ name: rName, target: rTarget, title: rName }) })) { setRName(''); setRTarget('http://10.0.0.'); }
   };
   const remove = async (r: Route) => {
-    const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.` : `Remove the route ${r.path}? The app itself is not touched.`;
+    const app = apps.find((a) => a.name === r.name);
+    const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.` : r.kind === 'app' ? `Delete the app "${r.title}"? Its container${app ? ` (CT ${app.ctid})` : ''} and everything in it is destroyed.` : `Remove the route ${r.path}? The app itself is not touched.`;
     if (window.confirm(msg)) await call(`del:${r.name}`, `./api/routes/${r.name}`, { method: 'DELETE' });
   };
   const startEdit = (r: Route) => { setEditing(r); setJob(null); window.scrollTo({ top: 0, behavior: 'smooth' }); window.setTimeout(() => box.current?.focus(), 300); };
@@ -539,6 +548,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
         <section className={`panel notice ${job.state === 'failed' ? 'error' : ''}`}>
           {job.state === 'running' && <><h2><span className="spinner" />{job.step}…</h2><p>{job.kind === 'create' ? 'A new site takes one to two minutes. You can leave this page; it keeps going.' : 'Gemini is rewriting the pages, usually under a minute.'}</p></>}
           {job.state === 'failed' && <><h2>That did not work</h2><p>{job.error}</p></>}
+          {job.log && <LogBox lines={job.log} />}
           {job.state === 'done' && job.result && (
             <>
               <h2>{job.kind === 'create' ? 'Your website is live' : 'Changes published'}</h2>
@@ -561,7 +571,7 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
       )}
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added. The dot shows whether each answers. Edit with AI: describe a change and Gemini rewrites the pages. wp-admin: edit text, images and menus by hand (user admin). Delete: removes a WordPress site with its pages and database (asks first, cannot be undone); for an app it only removes the address.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
+        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added. The dot shows whether each answers. Edit with AI: describe a change and Gemini rewrites the pages. wp-admin: edit text, images and menus by hand (user admin). Update (apps): pulls the newest code or image and restarts it; progress is in History. logs: opens the app's log. Delete: removes a WordPress site with its pages and database, or an app with its container (asks first, cannot be undone); for a link it only removes the address.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
         <ul className="site-list">
           {shown.map((r) => {
             const state = sites[`route:${r.name}`];
@@ -569,7 +579,8 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
               <li key={r.name}>
                 <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
                 <a href={`.${r.path}`}>{r.title}</a>
-                <span className="muted">{r.path} · {r.kind === 'wordpress' ? 'WordPress' : 'app'}</span>
+                <span className="muted">{r.path} · {r.kind === 'wordpress' ? 'WordPress' : r.kind === 'app' ? `app, CT ${apps.find((a) => a.name === r.name)?.ctid ?? '?'}` : 'link'}</span>
+                {r.kind === 'app' && pass && (() => { const a = apps.find((x) => x.name === r.name); return a ? <><a className="link" href={`#/logs/app-${a.ctid}`}>logs</a><button type="button" className="ghost" disabled={busy === `up:${r.name}`} onClick={() => void call(`up:${r.name}`, `./api/apps/${a.ctid}/update`, { method: 'POST' }).then((b) => { if (b) setError(''); })}>Update</button></> : null; })()}
                 {r.kind === 'wordpress' && pass && ai && <button type="button" className="ghost" disabled={running} onClick={() => startEdit(r)}><Icon name="spark" className="icon-xs" />Edit with AI</button>}
                 {r.kind === 'wordpress' && <a className="link" href={`.${r.path}wp-admin/`} target="_blank" rel="noreferrer">wp-admin</a>}
                 {pass && <button type="button" className="danger" disabled={busy === `del:${r.name}`} onClick={() => void remove(r)}>{busy === `del:${r.name}` ? '…' : 'Delete'}</button>}
@@ -579,9 +590,11 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
           {!shown.length && <li className="muted">No extra sites yet.</li>}
         </ul>
       </section>
+      {pass && <DeployApp pass={pass} onDone={loadApps} />}
+      {pass && <History pass={pass} />}
       {pass && (
         <details className="panel more">
-          <summary>Publish an app instead <Help title="Publish an app">Gives any app running on your network a public address /name/. Enter where it runs on the LAN, like http://10.0.0.225:8080/.</Help></summary>
+          <summary>Publish an app that already runs <Help title="Publish an app">For an app that already runs somewhere on your network: gives it a public address /name/. Enter where it runs on the LAN, like http://10.0.0.225:8080/.</Help></summary>
           <form className="form" onSubmit={newRoute}>
             <label>Name (becomes /name/)<input required pattern="[a-z0-9][a-z0-9-]{0,39}" value={rName} onChange={(e) => setRName(e.target.value.toLowerCase())} placeholder="e.g. notes" /></label>
             <label>App address on the LAN<input required value={rTarget} onChange={(e) => setRTarget(e.target.value)} placeholder="http://10.0.0.225:8080/" /></label>
@@ -639,6 +652,7 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
 // ---------- shell ----------
 export function App() {
   const [page, setPage] = useState<Page>(pageForHash);
+  const [logKey, setLogKey] = useState(() => window.location.hash.replace(/^#\/?logs\/?/, '').replace(/^#.*/, ''));
   const [query, setQuery] = useState('');
   const [pass, setPass] = useState(readPass);
   const [now, setNow] = useState(() => new Date());
@@ -649,7 +663,7 @@ export function App() {
   const sites = useMemo(() => Object.fromEntries((siteData?.results ?? []).map((r) => [r.id, r])), [siteData]);
 
   useEffect(() => {
-    const onHash = () => setPage(pageForHash());
+    const onHash = () => { setPage(pageForHash()); const m = window.location.hash.match(/^#\/?logs\/([a-z0-9-]+)/); if (m) setLogKey(m[1]); };
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       if (e.key === '/' && !typing) { e.preventDefault(); search.current?.focus(); }
@@ -668,7 +682,7 @@ export function App() {
   }, []);
 
   const q = query.trim().toLowerCase();
-  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['provision', 'Create', 'plus']];
+  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['provision', 'Create', 'plus']];
 
   return (
     <div className="shell">
@@ -703,6 +717,7 @@ export function App() {
         {page === 'services' && <Services query={q} sites={sites} />}
         {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
         {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
+        {page === 'logs' && (pass ? <LogsPage pass={pass} initial={logKey} /> : <><header className="hero"><div><p className="eyebrow">Logs</p><h1>What the server is saying</h1><p className="lede">Unlock to read the server's logs.</p></div></header><Login onLogin={setPass} /></>)}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
         </div>
       </main>
