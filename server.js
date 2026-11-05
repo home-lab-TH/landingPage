@@ -314,6 +314,22 @@ app.get('/api/wordpress/jobs/:name', async (request, response) => {
   } catch (error) { return fail(response, error); }
 });
 
+// Safety net: publish any finished WordPress site that has no route yet (e.g. the tab was closed mid-build).
+const deleting = new Set();
+const syncSites = async () => {
+  if (!process.env.SITE_AGENT_URL || !process.env.PROXY_AGENT_URL) return;
+  try {
+    const [{ sites = [] }, { routes: have = [] }] = await Promise.all([siteAgent('GET', '/sites'), proxyAgent('GET', '/routes')]);
+    for (const site of sites) {
+      if (site.status === 'building' || deleting.has(site.name) || have.some((r) => r.name === site.name)) continue;
+      const target = new URL(process.env.SITE_AGENT_URL); target.port = String(site.port); target.pathname = '/';
+      await proxyAgent('PUT', `/routes/${site.name}`, { path: `/sites/${site.name}/`, target: target.toString(), kind: 'wordpress', title: site.title });
+      routed.add(site.name); routeCache.at = 0;
+    }
+  } catch { /* agents down: try again next round */ }
+};
+setInterval(syncSites, 30000).unref();
+
 // Ask Gemini to change an existing site ("add a contact page", "make it more formal").
 app.post('/api/wordpress/:name/ai', async (request, response) => {
   if (!unlocked(request, response)) return;
@@ -340,8 +356,11 @@ app.delete('/api/routes/:name', async (request, response) => {
   try {
     const route = (await proxyAgent('GET', '/routes')).routes.find((r) => r.name === name);
     if (!route) return response.status(404).json({ message: `No site ${name}.` });
-    await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
-    if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+    deleting.add(name);
+    try {
+      await proxyAgent('DELETE', `/routes/${encodeURIComponent(name)}`);
+      if (route.kind === 'wordpress') await siteAgent('DELETE', `/sites/${encodeURIComponent(name)}`, undefined, 60000);
+    } finally { deleting.delete(name); routed.delete(name); }
     routeCache.at = 0; siteCache.at = 0;
     return response.json({ deleted: name, kind: route.kind });
   } catch (error) { return fail(response, error); }
