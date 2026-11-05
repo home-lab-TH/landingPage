@@ -1,0 +1,15 @@
+{
+  "title": "Homelab",
+  "subtitle": "Everything running on the server, in one place.",
+  "sites": [
+    { "id": "codezi", "title": "CodeZi", "description": "Real-time poker, games and leaderboards.", "url": "./codezi/", "check": "http://10.0.0.250/codezi/", "icon": "CZ", "ct": 100, "tags": ["React", "Node.js", "Socket.io"] },
+    { "id": "flights", "title": "Flight Monitor", "description": "Live altitude, heading and attitude tracking.", "url": "./docker-avi/", "check": "http://10.0.0.250/docker-avi/", "icon": "FM", "ct": 103, "tags": ["React", "Express", "Docker"] },
+    { "id": "jacob", "title": "Jacob's Flight Monitor", "description": "Jacob's flight app.", "url": "./jacobFlightMonitor/", "check": "http://10.0.0.250/jacobFlightMonitor/", "icon": "JF", "ct": 102, "tags": ["React", "Docker"] }
+  ],
+  "links": [
+    { "title": "Proxmox", "description": "Server admin (port 8006)", "url": "https://server:8006", "icon": "PX" },
+    { "title": "homelab-ops", "description": "Map, scripts and Gemini tasks", "url": "https://github.com/lakylaky963/homelab-ops", "icon": "OP" },
+    { "title": "CodeZi repo", "description": "lakylaky963/CodeZi-Homelab", "url": "https://github.com/lakylaky963/CodeZi-Homelab", "icon": "GH" },
+    { "title": "Flight Monitor repo", "description": "home-lab-TH/shachar_b_avi", "url": "https://github.com/home-lab-TH/shachar_b_avi", "icon": "GH" }
+  ]
+}
