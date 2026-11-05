@@ -3,11 +3,12 @@ import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
 import { Help } from './ui/Help';
 import { Backdrop } from './ui/Backdrop';
-import { DeployApp, History, LogBox, LogsPage } from './ui/Ops';
+import { DeployApp, History, LogBox, LogsPage, UpdatesPage, useJob } from './ui/Ops';
+import { HealthPanel, HistoryPanel, UptimeBars, useUptime } from './ui/Charts';
 import type { AppInfo } from './ui/Ops';
 
 // ---------- types ----------
-type Page = 'overview' | 'services' | 'sites' | 'notes' | 'logs' | 'provision';
+type Page = 'overview' | 'services' | 'sites' | 'notes' | 'logs' | 'updates' | 'provision';
 type ProvisionType = 'vm' | 'lxc';
 type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
@@ -19,7 +20,6 @@ type Route = { name: string; title: string; path: string; kind: string };
 type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
 type Item = { id: string; text: string; at: string; done?: boolean };
 type Notes = { note: string; prompts: Item[]; todos: Item[]; updated: string | null };
-type Job = { state: 'running' | 'done' | 'failed'; kind: 'create' | 'ai'; step: string; error: string; result: JobResult | null; log?: string[] };
 
 // ---------- helpers ----------
 const pageForHash = (): Page => {
@@ -29,6 +29,7 @@ const pageForHash = (): Page => {
   if (route === 'provision') return 'provision';
   if (route === 'notes') return 'notes';
   if (route === 'logs' || route.startsWith('logs/')) return 'logs';
+  if (route === 'updates') return 'updates';
   return 'overview';
 };
 const bytes = (n: number) => {
@@ -112,6 +113,7 @@ const Icon = ({ name, className = 'icon' }: { name: string; className?: string }
     send: <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
     note: <><path d="M5 3h10l4 4v14H5z" /><path d="M15 3v4h4" /><path d="M9 12h6M9 16h4" /></>,
     bookmark: <path d="M6 3h12v18l-6-4-6 4z" />,
+    refresh: <><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></>,
     list: <><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></>,
     check: <><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" /></>,
   };
@@ -192,6 +194,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
   const db = stats?.guests.find((g) => g.id === 106);
   const running = stats?.guests.filter((g) => g.status === 'running').length ?? 0;
   const upCount = config.sites.filter((s) => sites[s.id]?.up).length;
+  const uptime = useUptime(24);
   const down = [
     ...config.sites.filter((s) => sites[s.id] && !sites[s.id].up).map((s) => s.title),
     ...(stats?.guests ?? []).filter((g) => g.status !== 'running' && g.id !== 102 && g.id !== 104).map((g) => `${g.name} (${g.id})`),
@@ -225,9 +228,11 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
         </section>
       )}
 
+      {stats && <HistoryPanel />}
+
       <div className="grid-2">
         <section className="panel">
-          <div className="panel-head"><h2><Icon name="pulse" />Sites <Help title="Sites">Each app is checked every 30 seconds. Green means it answered, with the response time. Red means it gave an error or no answer. Click a name to open it.</Help></h2><a href="#/services" className="link">All services</a></div>
+          <div className="panel-head"><h2><Icon name="pulse" />Sites <Help title="Sites">Each app is checked every minute, even when nobody has the dashboard open. Green means it answered, with the response time. The bars show the last 24 hours (each bar is half an hour: green all up, amber some failures, red mostly down) and the % is the uptime. Click a name to open it.</Help></h2><a href="#/services" className="link">All services</a></div>
           <ul className="site-list">
             {config.sites.filter((s) => matches(query, s.title, s.description, ...s.tags)).map((site) => {
               const state = sites[site.id];
@@ -236,6 +241,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
                   <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
                   <a href={site.url}>{site.title}</a>
                   <span className="muted">{!state ? 'checking…' : state.up ? `${state.ms} ms` : state.code ? `error ${state.code}` : 'no answer'}</span>
+                  <UptimeBars data={uptime[site.id]} />
                 </li>
               );
             })}
@@ -253,6 +259,7 @@ const Overview = ({ query, stats, statsError, sites, pass }: { query: string; st
           {!stats && <p className="muted">Waiting for Proxmox…</p>}
         </section>
       </div>
+      <HealthPanel pass={pass} />
 
       <section className="panel">
         <div className="panel-head"><h2><Icon name="box" />Containers and VMs <Help title="Containers and VMs">Every guest on the server with its CPU, memory and disk use. Once unlocked: ≡ opens its logs, ↻ restarts, ■ stops and ▶ starts (stop and restart ask first). Delete only shows on guests made from this dashboard. Jacob's app (102) is never touched, and the proxy (101) and this dashboard (105) can't be stopped from here.</Help></h2><span className="muted">{query ? `${guests.length} match "${query}"` : `${guests.length} total`}</span></div>
@@ -416,23 +423,29 @@ const NotesPage = ({ query, pass, onLogin }: { query: string; pass: string; onLo
   );
 };
 
-const JOB_KEY = 'homelab-job';
-const readJob = (): { name: string; kind: string } | null => { try { return JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null'); } catch { return null; } };
-const saveJob = (value: { name: string; kind: string } | null) => { try { if (value) sessionStorage.setItem(JOB_KEY, JSON.stringify(value)); else sessionStorage.removeItem(JOB_KEY); } catch { /* private mode */ } };
+const JOB_KEY = 'homelab-job2';
+type Tracked = { source: 'site' | 'host'; id: string; kind: string; name: string };
+const readJob = (): Tracked | null => { try { return JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null'); } catch { return null; } };
+const saveJob = (value: Tracked | null) => { try { if (value) sessionStorage.setItem(JOB_KEY, JSON.stringify(value)); else sessionStorage.removeItem(JOB_KEY); } catch { /* private mode */ } };
 const slug = (text: string) => text.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 31);
-const STOP = new Set(['a', 'an', 'the', 'site', 'website', 'web', 'page', 'for', 'my', 'our', 'with', 'about', 'of', 'and', 'small', 'simple', 'new', 'i', 'want', 'make', 'me', 'build', 'create']);
-const IDEAS = ['A site for a small bakery with a menu, opening hours and a contact page', 'A portfolio for a student web developer with projects and an about page', 'A page for our school robotics team: who we are, competitions, join us'];
+const STOP = new Set(['a', 'an', 'the', 'site', 'website', 'web', 'page', 'for', 'my', 'our', 'with', 'about', 'of', 'and', 'small', 'simple', 'new', 'i', 'want', 'make', 'me', 'build', 'create', 'modern']);
+const IDEAS = ['A bold, modern site for a small bakery: hero photo, menu with prices, opening hours and a contact page', 'A dark, elegant portfolio for a student web developer with projects, skills and an about page', 'A colorful page for our school robotics team: who we are, competitions, sponsors, join us'];
+type Candidate = { ctid: number; name: string; status: string };
+type Editing = { route: Route; kind: 'wp' | 'aisite'; ctid?: number };
 
 const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; onLogin: (p: string) => void }) => {
   const [prompt, setPrompt] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [sitePass, setSitePass] = useState('');
-  const [editing, setEditing] = useState<Route | null>(null);
+  const [where, setWhere] = useState<string>('wp');
+  const [quality, setQuality] = useState<'fast' | 'best'>(() => { try { return (localStorage.getItem('homelab-quality') as 'fast' | 'best') || 'fast'; } catch { return 'fast'; } });
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [ai, setAi] = useState<boolean | null>(null);
   const [key, setKey] = useState('');
-  const [tracking, setTracking] = useState(readJob);
-  const [job, setJob] = useState<Job | null>(null);
+  const [tracking, setTracking] = useState<Tracked | null>(readJob);
+  const job = useJob(pass, tracking?.source ?? 'site', tracking?.id ?? null);
   const [rName, setRName] = useState('');
   const [rTarget, setRTarget] = useState('http://10.0.0.');
   const [busy, setBusy] = useState('');
@@ -440,7 +453,10 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
   const [savedPrompt, setSavedPrompt] = useState(false);
   const [apps, setApps] = useState<AppInfo[]>([]);
   const loadApps = () => { if (pass) fetch('./api/apps', { headers: { 'x-dashboard-password': pass } }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); };
-  useEffect(loadApps, [pass]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadCandidates = () => { if (pass) fetch('./api/aisites/candidates', { headers: { 'x-dashboard-password': pass } }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); };
+  useEffect(() => { loadApps(); loadCandidates(); }, [pass]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { try { localStorage.setItem('homelab-quality', quality); } catch { /* ignore */ } }, [quality]);
+  useEffect(() => { if (job && job.state !== 'running') { loadApps(); loadCandidates(); } }, [job?.state]); // eslint-disable-line react-hooks/exhaustive-deps
   const box = useRef<HTMLTextAreaElement>(null);
 
   const call = async (label: string, url: string, init: RequestInit = {}) => {
@@ -456,34 +472,43 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
   useEffect(() => { try { const p = sessionStorage.getItem(PROMPT_KEY); if (p) { setPrompt(p); sessionStorage.removeItem(PROMPT_KEY); } } catch { /* ignore */ } }, []);
   useEffect(() => { fetch('./api/ai').then((r) => r.json()).then((b: { ai: boolean }) => setAi(b.ai)).catch(() => setAi(false)); }, []);
   useEffect(() => { if (!nameTouched && !editing) setName(slug(prompt.split(/[.,:\n]/)[0].split(/\s+/).filter((w) => !STOP.has(w.toLowerCase())).slice(0, 2).join(' '))); }, [prompt, nameTouched, editing]);
-  useEffect(() => {
-    if (!tracking || !pass) return undefined;
-    let stop = false;
-    const tick = async () => {
-      try {
-        const response = await fetch(`./api/wordpress/jobs/${tracking.name}`, { headers: { 'x-dashboard-password': pass } });
-        const body = await response.json();
-        if (stop) return;
-        if (!response.ok) { setError(body.message || 'Lost track of the build.'); setTracking(null); saveJob(null); return; }
-        setJob(body as Job);
-        if (body.state !== 'running') { setTracking(null); saveJob(null); }
-      } catch { /* network blip: try again */ }
-    };
-    void tick();
-    const timer = window.setInterval(() => void tick(), 2500);
-    return () => { stop = true; window.clearInterval(timer); };
-  }, [tracking, pass]);
 
-  const follow = (target: { name: string; kind: string }) => { setJob({ state: 'running', kind: target.kind as Job['kind'], step: 'Starting', error: '', result: null }); setTracking(target); saveJob(target); };
+  const follow = (t: Tracked) => { setTracking(t); saveJob(t); };
+  useEffect(() => { if (job && job.state !== 'running') saveJob(null); }, [job?.state]);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (editing) {
-      const body = await call('go', `./api/wordpress/${editing.name}/ai`, { method: 'POST', body: JSON.stringify({ prompt }) });
-      if (body) { follow({ name: editing.name, kind: 'ai' }); setPrompt(''); }
+    if (editing?.kind === 'wp') {
+      const b = await call('go', `./api/wordpress/${editing.route.name}/ai`, { method: 'POST', body: JSON.stringify({ prompt, quality }) });
+      if (b) { follow({ source: 'site', id: b.id, kind: 'ai', name: editing.route.name }); setPrompt(''); }
       return;
     }
-    const body = await call('go', './api/wordpress', { method: 'POST', body: JSON.stringify({ name, password: sitePass, prompt: ai ? prompt : '' }) });
-    if (body) { follow({ name, kind: 'create' }); setPrompt(''); setName(''); setNameTouched(false); setSitePass(''); }
+    if (editing?.kind === 'aisite') {
+      const b = await call('go', `./api/aisites/${editing.ctid}/edit`, { method: 'POST', body: JSON.stringify({ prompt, quality }) });
+      if (b) { follow({ source: 'host', id: b.job, kind: 'aiedit', name: editing.route.name }); setPrompt(''); }
+      return;
+    }
+    if (where === 'wp') {
+      const b = await call('go', './api/wordpress', { method: 'POST', body: JSON.stringify({ name, password: sitePass, prompt: ai ? prompt : '', quality }) });
+      if (b) { follow({ source: 'site', id: b.id, kind: 'create', name }); setPrompt(''); setName(''); setNameTouched(false); setSitePass(''); }
+      return;
+    }
+    const b = await call('go', './api/aisites', { method: 'POST', body: JSON.stringify({ name, prompt, quality, ctid: where === 'new' ? null : Number(where) }) });
+    if (b) { follow({ source: 'host', id: b.job, kind: 'aisite', name }); setPrompt(''); setName(''); setNameTouched(false); setWhere('wp'); }
+  };
+  const undo = async () => {
+    if (!job) return;
+    if (tracking?.source === 'site') {
+      const b = await call('undo', `./api/wordpress/${job.name}/undo`, { method: 'POST', body: JSON.stringify({ job: job.id }) });
+      if (b) follow({ source: 'site', id: b.id, kind: 'undo', name: job.name });
+    } else if (job.ctid) {
+      const b = await call('undo', `./api/aisites/${job.ctid}/undo`, { method: 'POST' });
+      if (b) follow({ source: 'host', id: b.job, kind: 'aiundo', name: job.name });
+    }
+  };
+  const undoSite = async (r: Route, ctid: number) => {
+    if (!window.confirm(`Go back one version on ${r.title}?`)) return;
+    const b = await call(`undo:${r.name}`, `./api/aisites/${ctid}/undo`, { method: 'POST' });
+    if (b) follow({ source: 'host', id: b.job, kind: 'aiundo', name: r.name });
   };
   const bookmark = async () => {
     const current = await call('mark', './api/notes', { method: 'GET' });
@@ -501,38 +526,53 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
   };
   const remove = async (r: Route) => {
     const app = apps.find((a) => a.name === r.name);
-    const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.` : r.kind === 'app' ? `Delete the app "${r.title}"? Its container${app ? ` (CT ${app.ctid})` : ''} and everything in it is destroyed.` : `Remove the route ${r.path}? The app itself is not touched.`;
-    if (window.confirm(msg)) await call(`del:${r.name}`, `./api/routes/${r.name}`, { method: 'DELETE' });
+    const msg = r.kind === 'wordpress' ? `Delete the WordPress site "${r.title}"? Its pages, uploads and database are destroyed.`
+      : (r.kind === 'aisite' && app?.adopted) ? `Remove the website "${r.title}" from CT ${app.ctid}? The container itself stays.`
+        : r.kind === 'app' || r.kind === 'aisite' ? `Delete "${r.title}"? Its container${app ? ` (CT ${app.ctid})` : ''} and everything in it is destroyed.`
+          : `Remove the route ${r.path}? The app itself is not touched.`;
+    if (window.confirm(msg)) { await call(`del:${r.name}`, `./api/routes/${r.name}`, { method: 'DELETE' }); loadApps(); loadCandidates(); }
   };
-  const startEdit = (r: Route) => { setEditing(r); setJob(null); window.scrollTo({ top: 0, behavior: 'smooth' }); window.setTimeout(() => box.current?.focus(), 300); };
+  const startEdit = (r: Route, kind: 'wp' | 'aisite', ctid?: number) => { setEditing({ route: r, kind, ctid }); window.scrollTo({ top: 0, behavior: 'smooth' }); window.setTimeout(() => box.current?.focus(), 300); };
 
-  const running = !!tracking;
+  const running = job?.state === 'running';
   const shown = routes.filter((r) => matches(query, r.name, r.title, r.path, r.kind));
-  const ready = editing ? prompt.trim().length > 3 : SITE_NAME.test(name) && sitePass.length >= 8;
+  const isWp = !editing && where === 'wp';
+  const ready = editing ? prompt.trim().length > 3 : SITE_NAME.test(name) && (isWp ? sitePass.length >= 8 : prompt.trim().length > 3);
+  const result = job?.result as (JobResult & { summary?: string; notes?: string; target?: string }) | null | undefined;
+  const liveUrl = result?.url || (job ? `./${job.name}/` : '');
   return (
     <>
       <section className="builder">
         <p className="eyebrow"><Icon name="spark" className="icon-xs" /> Website builder</p>
-        <h1>{editing ? <>What should change on {editing.title}?</> : <>What website do you want?</>}
-          <Help big title="This page: Sites">Build a WordPress website with AI. 1. Describe it in the box. 2. Pick a name: it becomes the address /sites/name/. 3. Set a password for the WordPress login (user admin). 4. Press Create. It takes 1–2 minutes and you can leave the page. Your sites are listed below: Edit with AI changes their pages, wp-admin opens WordPress to edit by hand.</Help>
+        <h1>{editing ? <>What should change on {editing.route.title}?</> : <>What website do you want?</>}
+          <Help big title="This page: Sites">Build a website with AI in three steps: describe it, give it a name, press Create. Choose where it lives: <b>WordPress</b> (easy to edit by hand in wp-admin, needs a password) or <b>its own container</b> (Gemini writes the whole design in HTML and CSS; you can also pick one of your own containers, like test1). <b>Best</b> uses Gemini Pro for nicer results but is slower. Edit with AI changes a site later, and every AI change can be undone. Builds keep going if you leave the page; History shows what happened.</Help>
         </h1>
         <form className="ai-box" onSubmit={submit}>
           <textarea ref={box} rows={3} value={prompt} disabled={running} onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && ready && pass) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
-            placeholder={editing ? 'e.g. Add a contact page and make the home page more friendly' : ai === false ? 'Add your Gemini key below to let AI write the pages. You can still create an empty site.' : 'Describe it: who it is for, which pages, the feel…'} />
+            placeholder={editing ? 'e.g. Make it dark and elegant, add photos, and add an events page' : ai === false ? 'Add your Gemini key below to let AI write the pages.' : 'Describe it: who it is for, which pages, the look and feel, colors…'} />
           <div className="ai-row">
             {editing ? (
-              <span className="chip">Editing /sites/{editing.name}/ <button type="button" aria-label="Stop editing" onClick={() => setEditing(null)}>×</button></span>
+              <span className="chip">Editing /{editing.route.path.replace(/^\/|\/$/g, '')}/ <button type="button" aria-label="Stop editing" onClick={() => setEditing(null)}>×</button></span>
             ) : (
               <>
-                <label className="pill"><span>Name <Help title="Site name">Becomes the web address /sites/name/. Lowercase letters, digits and dashes. It fills in from your description; change it if you like.</Help></span><input value={name} pattern="[a-z0-9][a-z0-9\-]{1,30}" onChange={(e) => { setNameTouched(true); setName(slug(e.target.value)); }} placeholder="bakery" aria-label="Site name" /></label>
-                <label className="pill"><span>Password <Help title="Site password">The WordPress login password for this site (user admin), at least 8 characters. Write it down: it is not shown again.</Help></span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>
+                <label className="pill"><span>Where <Help title="Where it lives">WordPress: on the websites server, with wp-admin to edit by hand. New container: its own small container where Gemini writes the full design (HTML and CSS). Or pick one of your own dashboard containers (like test1): the site is installed on it and the container stays yours.</Help></span>
+                  <select value={where} onChange={(e) => setWhere(e.target.value)} aria-label="Where the site lives">
+                    <option value="wp">WordPress</option>
+                    <option value="new">New container</option>
+                    {candidates.map((c) => <option key={c.ctid} value={String(c.ctid)}>{c.name} (CT {c.ctid})</option>)}
+                  </select></label>
+                <label className="pill"><span>Name <Help title="Site name">Becomes the web address: /sites/name/ for WordPress, /name/ for a container site. Lowercase letters, digits and dashes.</Help></span><input value={name} pattern="[a-z0-9][a-z0-9\-]{1,30}" onChange={(e) => { setNameTouched(true); setName(slug(e.target.value)); }} placeholder="bakery" aria-label="Site name" /></label>
+                {isWp && <label className="pill"><span>Password <Help title="Site password">The WordPress login password for this site (user admin), at least 8 characters. Write it down: it is not shown again.</Help></span><input type="password" value={sitePass} minLength={8} autoComplete="new-password" onChange={(e) => setSitePass(e.target.value)} placeholder="8+ characters" aria-label="Site password" /></label>}
               </>
             )}
             <span className="ai-actions">
-              {pass && prompt.trim().length > 3 && <Help title="Save">Saves the text in the box to Notes, under Saved prompts, so you can reuse it later.</Help>}
+              <span className="quality" role="radiogroup" aria-label="Quality">
+                <button type="button" className={quality === 'fast' ? 'on' : ''} onClick={() => setQuality('fast')}>Fast</button>
+                <button type="button" className={quality === 'best' ? 'on' : ''} onClick={() => setQuality('best')}>Best</button>
+              </span>
+              <Help title="Fast or Best">Fast uses Gemini Flash: about a minute. Best uses Gemini Pro: better writing and design, a few minutes, and falls back to Flash if Pro is busy or out of free quota.</Help>
               {pass && prompt.trim().length > 3 && <button type="button" className="mark" title="Save this prompt to Notes" aria-label="Save prompt to Notes" disabled={busy === 'mark'} onClick={() => void bookmark()}><Icon name="bookmark" className="icon-xs" />{savedPrompt ? 'Saved' : 'Save'}</button>}
-              <Help title={editing ? 'Apply' : 'Create'}>{editing ? 'Gemini reads the site and rewrites the pages as you asked. Removed pages go to the WordPress trash, so nothing is lost for good.' : !pass ? 'Unlock with the main password first (form below).' : 'Builds WordPress, then Gemini writes the pages from your description. Needs a name and an 8+ character password. Enter in the box does the same.'}</Help>
               <button className="send" type="submit" disabled={!pass || !ready || running || !!busy} aria-label={editing ? 'Apply changes' : 'Create website'}>
                 {busy === 'go' ? '…' : <><Icon name={editing ? 'spark' : 'send'} />{editing ? 'Apply' : 'Create'}</>}
               </button>
@@ -540,49 +580,57 @@ const Sites = ({ query, routes, sites, pass, onLogin }: { query: string; routes:
           </div>
         </form>
         {!editing && !prompt && ai !== false && <div className="ideas"><Help title="Ideas">Example descriptions. Click one to put it in the box, then edit it.</Help>{IDEAS.map((idea) => <button key={idea} type="button" onClick={() => setPrompt(idea)}>{idea}</button>)}</div>}
-        {!editing && name && <p className="muted hint">Address: /sites/{name}/ · log in to WordPress as <code>admin</code> with the password you set.</p>}
+        {!editing && name && <p className="muted hint">Address: {isWp ? `/sites/${name}/, log in to WordPress as admin with the password you set` : `/${name}/`}.</p>}
       </section>
 
       {error && <p className="message error">{error}</p>}
       {job && (
         <section className={`panel notice ${job.state === 'failed' ? 'error' : ''}`}>
-          {job.state === 'running' && <><h2><span className="spinner" />{job.step}…</h2><p>{job.kind === 'create' ? 'A new site takes one to two minutes. You can leave this page; it keeps going.' : 'Gemini is rewriting the pages, usually under a minute.'}</p></>}
+          {job.state === 'running' && <><h2><span className="spinner" />{job.step}…</h2><p>{job.kind === 'create' || job.kind === 'aisite' ? 'A new site takes one to three minutes (longer with Best and pictures). You can leave this page; it keeps going and History keeps the result.' : 'Gemini is working on the site, usually one to two minutes.'}</p></>}
           {job.state === 'failed' && <><h2>That did not work</h2><p>{job.error}</p></>}
-          {job.log && <LogBox lines={job.log} />}
-          {job.state === 'done' && job.result && (
+          {job.state === 'done' && (
             <>
-              <h2>{job.kind === 'create' ? 'Your website is live' : 'Changes published'}</h2>
-              <ol>
-                <li>Site: <a className="link" href={job.result.url} target="_blank" rel="noreferrer">{job.result.url}</a></li>
-                <li>Edit by hand: <a className="link" href={job.result.admin_url} target="_blank" rel="noreferrer">{job.result.admin_url}</a>{job.kind === 'create' && <> · user <code>admin</code>{job.result.admin_password ? <> · password <code>{job.result.admin_password}</code></> : ' · your password'}</>}</li>
-                {job.result.ai_note && <li>The site was created but AI could not write the pages: {job.result.ai_note}. Use “Edit with AI” to try again.</li>}
-              </ol>
+              <h2>{{ create: 'Your website is live', aisite: 'Your website is live', ai: 'Changes published', aiedit: 'Changes published', undo: 'Change undone', aiundo: 'Change undone' }[job.kind] ?? 'Done'}</h2>
+              {result?.summary && <p className="summary">{result.summary}</p>}
+              {result?.notes && <p className="muted"><b>Check:</b> {result.notes}</p>}
+              <p className="result-links">
+                <a className="primary" href={liveUrl} target="_blank" rel="noreferrer">Open the site</a>
+                {result?.admin_url && <a className="link" href={result.admin_url} target="_blank" rel="noreferrer">wp-admin</a>}
+                {result?.admin_password && <span className="muted">user <code>admin</code>, password <code>{result.admin_password}</code></span>}
+                {(job.can_undo || job.kind === 'aiedit') && <button type="button" className="ghost" disabled={busy === 'undo'} onClick={() => void undo()}>Undo this change</button>}
+                <Help title="Undo">Puts the site back exactly as it was before this AI change. WordPress keeps the old pages; container sites keep their last 15 versions.</Help>
+              </p>
+              {job.kind === 'create' && (result as { ai_note?: string })?.ai_note && <p className="bad">The site was created but AI could not write the pages: {(result as { ai_note?: string }).ai_note}. Use Edit with AI to try again.</p>}
             </>
           )}
+          <LogBox lines={job.log ?? []} />
         </section>
       )}
       {!pass && <Login onLogin={onLogin} />}
       {pass && ai === false && (
         <form className="panel form key-form" onSubmit={saveKey}>
           <h2><Icon name="spark" />Connect Gemini <Help title="Gemini key">The builder uses Google Gemini to write the pages. Make a key at aistudio.google.com and paste it once. It is stored only on the websites server (CT 108) and never shown again.</Help></h2>
-          <p className="muted hint">Get a key at aistudio.google.com → Get API key, then paste it here. It is saved on the websites server only, and never shown again.</p>
           <div className="row"><input type="password" required value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your Gemini API key" autoComplete="off" /><button className="primary" type="submit" disabled={busy === 'key'}>{busy === 'key' ? 'Saving…' : 'Save key'}</button></div>
         </form>
       )}
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added. The dot shows whether each answers. Edit with AI: describe a change and Gemini rewrites the pages. wp-admin: edit text, images and menus by hand (user admin). Update (apps): pulls the newest code or image and restarts it; progress is in History. logs: opens the app's log. Delete: removes a WordPress site with its pages and database, or an app with its container (asks first, cannot be undone); for a link it only removes the address.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
+        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added; the dot shows whether each answers. Edit with AI: describe a change. Undo: go back one AI change. wp-admin: edit a WordPress site by hand (user admin). Update (apps): pulls the newest code or image. logs: the app's log. Delete asks first; a site on one of your own containers is removed but the container stays.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
         <ul className="site-list">
           {shown.map((r) => {
             const state = sites[`route:${r.name}`];
+            const a = apps.find((x) => x.name === r.name);
             return (
               <li key={r.name}>
                 <Dot state={!state ? 'idle' : state.up ? 'up' : 'down'} />
                 <a href={`.${r.path}`}>{r.title}</a>
-                <span className="muted">{r.path} · {r.kind === 'wordpress' ? 'WordPress' : r.kind === 'app' ? `app, CT ${apps.find((a) => a.name === r.name)?.ctid ?? '?'}` : 'link'}</span>
-                {r.kind === 'app' && pass && (() => { const a = apps.find((x) => x.name === r.name); return a ? <><a className="link" href={`#/logs/app-${a.ctid}`}>logs</a><button type="button" className="ghost" disabled={busy === `up:${r.name}`} onClick={() => void call(`up:${r.name}`, `./api/apps/${a.ctid}/update`, { method: 'POST' }).then((b) => { if (b) setError(''); })}>Update</button></> : null; })()}
-                {r.kind === 'wordpress' && pass && ai && <button type="button" className="ghost" disabled={running} onClick={() => startEdit(r)}><Icon name="spark" className="icon-xs" />Edit with AI</button>}
+                <span className="muted">{r.path}, {r.kind === 'wordpress' ? 'WordPress' : r.kind === 'aisite' ? `AI site on CT ${a?.ctid ?? '?'}` : r.kind === 'app' ? `app on CT ${a?.ctid ?? '?'}` : 'link'}</span>
+                {r.kind === 'wordpress' && pass && ai && <button type="button" className="ghost" disabled={running} onClick={() => startEdit(r, 'wp')}><Icon name="spark" className="icon-xs" />Edit with AI</button>}
+                {r.kind === 'aisite' && pass && a && <><button type="button" className="ghost" disabled={running} onClick={() => startEdit(r, 'aisite', a.ctid)}><Icon name="spark" className="icon-xs" />Edit with AI</button><button type="button" className="ghost" disabled={running || busy === `undo:${r.name}`} onClick={() => void undoSite(r, a.ctid)}>Undo</button></>}
+                {r.kind === 'app' && pass && a && <button type="button" className="ghost" disabled={busy === `up:${r.name}`} onClick={() => void call(`up:${r.name}`, `./api/apps/${a.ctid}/update`, { method: 'POST' }).then((b) => { if (b) follow({ source: 'host', id: b.job, kind: 'update', name: r.name }); })}>Update</button>}
+                {(r.kind === 'app' || r.kind === 'aisite') && pass && a && <a className="link" href={`#/logs/app-${a.ctid}`}>logs</a>}
                 {r.kind === 'wordpress' && <a className="link" href={`.${r.path}wp-admin/`} target="_blank" rel="noreferrer">wp-admin</a>}
+                {r.kind === 'wordpress' && pass && <a className="link" href={`#/logs/wp-${r.name}`}>logs</a>}
                 {pass && <button type="button" className="danger" disabled={busy === `del:${r.name}`} onClick={() => void remove(r)}>{busy === `del:${r.name}` ? '…' : 'Delete'}</button>}
               </li>
             );
@@ -613,6 +661,7 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
   const [cores, setCores] = useState(2);
   const [memory, setMemory] = useState(2048);
   const [disk, setDisk] = useState(8);
+  const [loginPass, setLoginPass] = useState('');
   const [state, setState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
 
@@ -620,7 +669,7 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
     event.preventDefault();
     setState('loading'); setMessage('');
     try {
-      const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify({ type, name, cores, memory, disk }) });
+      const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify({ type, name, cores, memory, disk, password: loginPass }) });
       const data: { message?: string; task?: string; id?: number } = await response.json();
       if (!response.ok) throw new Error(data.message || 'Proxmox did not accept the request.');
       setState('success'); setMessage(`Creating ${type.toUpperCase()} ${data.id ?? ''} (${name}). It shows up on the Overview in a minute; delete it there if you don't need it.`);
@@ -641,7 +690,8 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
           <label><span>CPU cores <Help title="CPU cores">How many processor threads it may use. 1–2 is plenty for a small app.</Help></span><input type="number" min={1} max={8} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
           <label><span>Memory (MiB) <Help title="Memory">RAM in MiB: 1024 = 1 GB. The server has 16 GB shared by everything.</Help></span><input type="number" min={256} max={8192} step={256} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
         </div>
-        <label><span>Disk (GB) <Help title="Disk">Disk size in GB. It can be grown later in Proxmox, not shrunk.</Help></span><input type="number" min={2} max={100} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
+        <label><span>Disk (GB) <Help title="Disk">Disk size in GB. It can be grown later in Proxmox, not shrunk. VMs start from a 3 GB image that is grown to this size.</Help></span><input type="number" min={type === 'vm' ? 4 : 2} max={100} value={disk} onChange={(e) => setDisk(Number(e.target.value))} /></label>
+        <label><span>Login password (optional) <Help title="Login password">The password to log in to the new machine: user root for a container, user debian for a VM (Debian 13). Leave empty to set it later in Proxmox (containers can always be opened from the Proxmox console).</Help></span><input type="password" minLength={8} autoComplete="new-password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} placeholder="8+ characters" /></label>
         <button className="primary" disabled={state === 'loading'} type="submit"><Icon name="plus" />{state === 'loading' ? 'Creating…' : `Create ${type === 'lxc' ? 'container' : 'VM'}`}</button>
         {state !== 'idle' && state !== 'loading' && <p className={`message ${state}`}>{message}</p>}
       </form>}
@@ -682,7 +732,7 @@ export function App() {
   }, []);
 
   const q = query.trim().toLowerCase();
-  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['provision', 'Create', 'plus']];
+  const nav: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['updates', 'Updates', 'refresh'], ['provision', 'Create', 'plus']];
 
   return (
     <div className="shell">
@@ -717,6 +767,7 @@ export function App() {
         {page === 'services' && <Services query={q} sites={sites} />}
         {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
         {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
+        {page === 'updates' && (pass ? <UpdatesPage pass={pass} /> : <><header className="hero"><div><p className="eyebrow">Updates</p><h1>Keep everything patched</h1><p className="lede">Unlock to check and install updates.</p></div></header><Login onLogin={setPass} /></>)}
         {page === 'logs' && (pass ? <LogsPage pass={pass} initial={logKey} /> : <><header className="hero"><div><p className="eyebrow">Logs</p><h1>What the server is saying</h1><p className="lede">Unlock to read the server's logs.</p></div></header><Login onLogin={setPass} /></>)}
         {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
         </div>
