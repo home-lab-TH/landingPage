@@ -135,7 +135,7 @@ const Ring = ({ value: target, label, detail, help }: { value: number; label: st
   const value = useTween(target);
   return (
     <div className="ring-card">
-      <svg viewBox="0 0 80 80" className="ring" role="img" aria-label={`${label} ${pct(value)}`}>
+      <svg viewBox="0 0 80 80" className="gauge" role="img" aria-label={`${label} ${pct(value)}`}>
         <circle cx="40" cy="40" r={r} className="ring-track" />
         <circle cx="40" cy="40" r={r} className={`ring-value ${level(value)}`} strokeDasharray={c} strokeDashoffset={c * (1 - value)} />
         <text x="40" y="45" textAnchor="middle">{pct(value)}</text>
@@ -624,7 +624,7 @@ const Provision = ({ pass, onLogin }: { pass: string; onLogin: (p: string) => vo
           <button type="button" className={type === 'vm' ? 'on' : ''} onClick={() => setType('vm')}><Icon name="server" />Virtual machine</button>
         </div>
         <label><span>Name <Help title="Name">The guest's hostname. Lowercase letters, digits and dashes.</Help></span><input required minLength={2} maxLength={50} pattern="[a-z0-9][a-z0-9-]*" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. paperless" /></label>
-        <div className="row-2">
+        <div className="pair">
           <label><span>CPU cores <Help title="CPU cores">How many processor threads it may use. 1–2 is plenty for a small app.</Help></span><input type="number" min={1} max={8} value={cores} onChange={(e) => setCores(Number(e.target.value))} /></label>
           <label><span>Memory (MiB) <Help title="Memory">RAM in MiB: 1024 = 1 GB. The server has 16 GB shared by everything.</Help></span><input type="number" min={256} max={8192} step={256} value={memory} onChange={(e) => setMemory(Number(e.target.value))} /></label>
         </div>

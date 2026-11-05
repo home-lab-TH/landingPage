@@ -52,6 +52,7 @@ export function Backdrop({ guests }: { guests: BackdropGuest[] }) {
           if (hd > Math.min(w, h) * 0.55) { n.vx -= hx * 0.00002; n.vy -= hy * 0.00002; }
           if (n.x < 20 || n.x > w - 20) n.vx *= -1;
           if (n.y < 20 || n.y > h - 20) n.vy *= -1;
+          n.x = Math.max(12, Math.min(w - 12, n.x)); n.y = Math.max(12, Math.min(h - 12, n.y));
         }
       }
       // links between nearby guests
