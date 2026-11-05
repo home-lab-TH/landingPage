@@ -21,9 +21,8 @@ export const dashboardConfig = {
     ] },
   ] satisfies UserSection[],
   sharedProjects: [
-    { title: 'Workshop Wiki', status: 'Online', description: 'The shared source of truth for setup notes, plans, and hard-won lessons.', url: './wiki', icon: 'WW', stack: ['Outline', 'Postgres', 'Docker'] },
-    { title: 'Little Signal', status: 'In Development', description: 'A simple family check-in board made for the people we care about.', url: './signal', icon: 'LS', stack: ['Next.js', 'Supabase', 'Vercel'] },
-    { title: 'Cloud Shelf', status: 'Online', description: 'Our shared storage space for projects, assets, and large files.', url: './cloud', icon: 'CS', stack: ['Nextcloud', 'Redis', 'Traefik'] },
-    { title: 'Friday Radio', status: 'In Development', description: 'Collaborative playlists and a small broadcast station for the weekend.', url: './radio', icon: 'FR', stack: ['React', 'Node.js', 'Icecast'] },
+    { title: 'CodeZi', status: 'Online', description: 'Real-time poker, games and leaderboards.', url: './codezi/', icon: 'CZ', stack: ['React', 'Node.js', 'Socket.io', 'MongoDB'] },
+    { title: 'Flight Monitor', status: 'Online', description: 'Flight price tracking (shachar_b).', url: './docker-avi/', icon: 'FM', stack: ['React', 'Express', 'MongoDB', 'Docker'] },
+    { title: "Jacob's Flight Monitor", status: 'Online', description: "Jacob's flight app.", url: './jacobFlightMonitor/', icon: 'JF', stack: ['React', 'Express', 'Docker'] },
   ],
 };
