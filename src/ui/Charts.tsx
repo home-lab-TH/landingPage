@@ -12,6 +12,7 @@ const when = (t: number, range: string) => new Date(t).toLocaleString([], range 
 function LineChart({ points, series, range, max }: { points: Point[]; series: Series[]; range: string; max?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const box = useRef<SVGSVGElement>(null);
+  const rect = useRef<DOMRect | null>(null);
   const W = 600; const H = 150; const P = 4;
   const top = useMemo(() => max ?? Math.max(1e-9, ...points.flatMap((p) => series.map((s) => Number(p[s.key] ?? 0)))) * 1.15, [points, series, max]);
   if (points.length < 2) return <p className="muted chart-empty">Not enough data yet.</p>;
@@ -22,14 +23,14 @@ function LineChart({ points, series, range, max }: { points: Point[]; series: Se
   const area = (key: string) => { const d = line(key); return d ? `${d}L${x(t1).toFixed(1)},${H - P}L${x(t0).toFixed(1)},${H - P}Z` : ''; };
   const hp = hover !== null ? points[hover] : null;
   const onMove = (e: React.PointerEvent) => {
-    const r = box.current?.getBoundingClientRect(); if (!r) return;
+    const r = rect.current ?? (rect.current = box.current?.getBoundingClientRect() ?? null); if (!r) return;
     const tx = t0 + ((e.clientX - r.left) / r.width) * (t1 - t0);
     let best = 0; for (let i = 1; i < points.length; i += 1) if (Math.abs(points[i].t - tx) < Math.abs(points[best].t - tx)) best = i;
     setHover(best);
   };
   return (
     <div className="chart">
-      <svg ref={box} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onPointerMove={onMove} onPointerLeave={() => setHover(null)} role="img" aria-label={series.map((s) => s.label).join(', ')}>
+      <svg ref={box} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onPointerEnter={() => { rect.current = null; }} onPointerMove={onMove} onPointerLeave={() => { setHover(null); rect.current = null; }} role="img" aria-label={series.map((s) => s.label).join(', ')}>
         <defs>{series.map((s) => <linearGradient key={s.key} id={`g-${s.key}`} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor={s.color} stopOpacity=".35" /><stop offset="1" stopColor={s.color} stopOpacity="0" /></linearGradient>)}</defs>
         {[0.25, 0.5, 0.75].map((g) => <line key={g} x1="0" x2={W} y1={H * g} y2={H * g} className="grid-line" />)}
         {series.map((s) => <path key={`a${s.key}`} d={area(s.key)} fill={`url(#g-${s.key})`} />)}
@@ -64,10 +65,10 @@ export function HistoryPanel() {
         <span className="tools" role="radiogroup" aria-label="Time range">{RANGES.map(([k, l]) => <button key={k} type="button" className={`toggle ${range === k ? 'on' : ''}`} onClick={() => setRange(k)}>{l}</button>)}</span></div>
       {error && <p className="message error">{error}</p>}
       <div className="charts">
-        <div><p className="chart-title">CPU <span className="muted">average {pct(avg('cpu'))}, peak {pct(peak('cpu'))}</span></p><LineChart points={points} range={range} max={Math.max(0.2, peak('cpu') * 1.2)} series={[{ key: 'cpu', label: 'CPU', color: '#4fe3c1', format: pct }]} /></div>
-        <div><p className="chart-title">Memory <span className="muted">average {pct(avg('mem'))}, peak {pct(peak('mem'))}</span></p><LineChart points={points} range={range} max={1} series={[{ key: 'mem', label: 'Memory', color: '#9b8cff', format: pct }]} /></div>
-        <div><p className="chart-title">Network <span className="muted">peak in {rate(peak('netin'))}, out {rate(peak('netout'))}</span></p><LineChart points={points} range={range} series={[{ key: 'netin', label: 'In', color: '#5ab4ff', format: rate }, { key: 'netout', label: 'Out', color: '#ffb547', format: rate }]} /></div>
-        <div><p className="chart-title">Disk wait <span className="muted">time the CPU waits for disks</span></p><LineChart points={points} range={range} max={Math.max(0.05, peak('iowait') * 1.2)} series={[{ key: 'iowait', label: 'IO wait', color: '#ff6b81', format: pct }]} /></div>
+        <div><p className="chart-title">CPU <span className="muted">average {pct(avg('cpu'))}, peak {pct(peak('cpu'))}</span></p><LineChart points={points} range={range} max={Math.max(0.2, peak('cpu') * 1.2)} series={[{ key: 'cpu', label: 'CPU', color: '#ffb84d', format: pct }]} /></div>
+        <div><p className="chart-title">Memory <span className="muted">average {pct(avg('mem'))}, peak {pct(peak('mem'))}</span></p><LineChart points={points} range={range} max={1} series={[{ key: 'mem', label: 'Memory', color: '#7aa2ff', format: pct }]} /></div>
+        <div><p className="chart-title">Network <span className="muted">peak in {rate(peak('netin'))}, out {rate(peak('netout'))}</span></p><LineChart points={points} range={range} series={[{ key: 'netin', label: 'In', color: '#7aa2ff', format: rate }, { key: 'netout', label: 'Out', color: '#ffb84d', format: rate }]} /></div>
+        <div><p className="chart-title">Disk wait <span className="muted">time the CPU waits for disks</span></p><LineChart points={points} range={range} max={Math.max(0.05, peak('iowait') * 1.2)} series={[{ key: 'iowait', label: 'IO wait', color: '#f87171', format: pct }]} /></div>
       </div>
     </section>
   );

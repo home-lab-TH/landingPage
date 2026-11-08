@@ -1,15 +1,134 @@
 {
   "title": "Homelab",
-  "subtitle": "Everything running on the server, in one place.",
+  "subtitle": "Apps, containers and live status from one Proxmox server.",
   "sites": [
-    { "id": "codezi", "title": "CodeZi", "description": "Real-time poker, games and leaderboards.", "url": "./codezi/", "check": "http://10.0.0.250/codezi/", "icon": "CZ", "ct": 100, "tags": ["React", "Node.js", "Socket.io"] },
-    { "id": "flights", "title": "Flight Monitor", "description": "Live altitude, heading and attitude tracking.", "url": "./docker-avi/", "check": "http://10.0.0.250/docker-avi/", "icon": "FM", "ct": 103, "tags": ["React", "Express", "Docker"] },
-    { "id": "jacob", "title": "Jacob's Flight Monitor", "description": "Jacob's flight app.", "url": "./jacobFlightMonitor/", "check": "http://10.0.0.250/jacobFlightMonitor/", "icon": "JF", "ct": 102, "tags": ["React", "Docker"] }
+    {
+      "id": "codezi",
+      "title": "CodeZi",
+      "description": "Real-time poker, games and leaderboards.",
+      "url": "./codezi/",
+      "check": "http://10.0.0.250/codezi/",
+      "icon": "CZ",
+      "ct": 100,
+      "owner": "avraham",
+      "repo": "https://github.com/lakylaky963/CodeZi-Homelab",
+      "tags": [
+        "React",
+        "Node.js",
+        "Socket.io"
+      ]
+    },
+    {
+      "id": "flights",
+      "title": "Flight Monitor",
+      "description": "Live altitude, heading and attitude tracking.",
+      "url": "./docker-avi/",
+      "check": "http://10.0.0.250/docker-avi/",
+      "icon": "FM",
+      "ct": 103,
+      "owner": "avraham",
+      "repo": "https://github.com/home-lab-TH/shachar_b_avi",
+      "tags": [
+        "React",
+        "Express",
+        "Docker"
+      ]
+    },
+    {
+      "id": "jacob",
+      "title": "Jacob's Flight Monitor",
+      "description": "Flight tracking app with its own database.",
+      "url": "./jacobFlightMonitor/",
+      "check": "http://10.0.0.250/jacobFlightMonitor/",
+      "icon": "JF",
+      "ct": 102,
+      "owner": "jacob",
+      "repo": "https://github.com/Blitzx-W/Blue-Shahar-project",
+      "tags": [
+        "React",
+        "Docker",
+        "MongoDB"
+      ]
+    }
   ],
+  "members": [
+    {
+      "id": "avraham",
+      "name": "Avraham Arazi",
+      "initials": "AA",
+      "color": "blue",
+      "role": "Server owner"
+    },
+    {
+      "id": "jacob",
+      "name": "Jacob Tarab",
+      "initials": "JT",
+      "color": "violet"
+    },
+    {
+      "id": "ariel",
+      "name": "Ariel Ahunov",
+      "initials": "AA",
+      "color": "green"
+    }
+  ],
+  "stacks": {
+    "100": [
+      "web \u00b7 nginx",
+      "backend \u00b7 node 22"
+    ],
+    "101": [
+      "nginx",
+      "tailscale serve"
+    ],
+    "102": [
+      "client",
+      "server",
+      "mongo 4.4"
+    ],
+    "103": [
+      "client",
+      "server"
+    ],
+    "105": [
+      "dashboard \u00b7 node"
+    ],
+    "106": [
+      "mongod 7.0"
+    ],
+    "107": [
+      "gemini cli",
+      "gh runner"
+    ],
+    "108": [
+      "wordpress",
+      "mariadb",
+      "site agent"
+    ]
+  },
   "links": [
-    { "title": "Proxmox", "description": "Server admin (port 8006)", "url": "https://server:8006", "icon": "PX" },
-    { "title": "homelab-ops", "description": "Map, scripts and Gemini tasks", "url": "https://github.com/lakylaky963/homelab-ops", "icon": "OP" },
-    { "title": "CodeZi repo", "description": "lakylaky963/CodeZi-Homelab", "url": "https://github.com/lakylaky963/CodeZi-Homelab", "icon": "GH" },
-    { "title": "Flight Monitor repo", "description": "home-lab-TH/shachar_b_avi", "url": "https://github.com/home-lab-TH/shachar_b_avi", "icon": "GH" }
-  ]
+    {
+      "title": "Proxmox",
+      "description": "Server admin, port 8006",
+      "url": "https://server:8006",
+      "icon": "PX"
+    },
+    {
+      "title": "homelab-ops",
+      "description": "Map, scripts and Gemini tasks",
+      "url": "https://github.com/lakylaky963/homelab-ops",
+      "icon": "OP"
+    }
+  ],
+  "network": {
+    "101": "10.0.0.250",
+    "100": "10.0.0.222",
+    "102": "DHCP",
+    "103": "10.0.0.224",
+    "104": "10.0.0.225",
+    "105": "10.0.0.223",
+    "106": "10.0.0.230",
+    "107": "10.0.0.240",
+    "108": "10.0.0.226"
+  }
 }
