@@ -53,5 +53,5 @@ jobs:
         run: |
           if pm2 describe landing-page > /dev/null 2>&1; then pm2 restart landing-page --update-env; else pm2 start npm --name landing-page -- start; fi
           pm2 save
-          for i in $(seq 1 10); do curl -fsS http://localhost:3000/api/health > /dev/null && { echo healthy; exit 0; }; sleep 2; done
+          for i in $(seq 1 10); do curl -fsS http://localhost:3000/api/ping > /dev/null && { echo healthy; exit 0; }; sleep 2; done
           pm2 logs landing-page --lines 30 --nostream; exit 1

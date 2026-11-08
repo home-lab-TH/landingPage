@@ -110,7 +110,7 @@ export function HealthPanel({ pass }: { pass: string }) {
   const [h, setH] = useState<{ temps: Temp[]; disks: Disk[]; at: string } | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    const load = () => fetch('./api/health', { headers: pass ? { 'x-dashboard-password': pass } : {} }).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.message); setH(b); setError(''); }).catch((e: Error) => setError(e.message));
+    const load = () => fetch('./api/health', { headers: pass ? { 'x-dashboard-password': pass } : {} }).then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.message); setH({ temps: Array.isArray(b.temps) ? b.temps : [], disks: Array.isArray(b.disks) ? b.disks : [], at: b.at ?? '' }); setError(''); }).catch((e: Error) => setError(e.message));
     void load();
     const t = window.setInterval(() => void load(), 60000);
     return () => window.clearInterval(t);

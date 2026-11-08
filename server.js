@@ -53,8 +53,8 @@ const statsConfigured = () => Boolean(baseUrl() && process.env.PROXMOX_NODE
   && (process.env.PROXMOX_READ_TOKEN_ID || process.env.PROXMOX_TOKEN_ID)
   && (process.env.PROXMOX_READ_TOKEN_SECRET || process.env.PROXMOX_TOKEN_SECRET));
 
-// ---------- /api/health ----------
-app.get('/api/health', (_request, response) => {
+// ---------- /api/ping (liveness for the deploy check; /api/health is the host-agent health panel) ----------
+app.get('/api/ping', (_request, response) => {
   response.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
