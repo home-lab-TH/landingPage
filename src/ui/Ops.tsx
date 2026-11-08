@@ -225,7 +225,7 @@ export function LogsPage({ pass, initial }: { pass: string; initial: string }) {
 
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Logs</p><h1>What the server is saying <Help big title="This page: Logs">Read the logs of every part of the server without logging in anywhere. Pick a source on the left. Live refreshes every 5 seconds; Errors shows only lines with errors and warnings; the filter box finds text. Red lines are errors, amber are warnings. Logs are read-only here: nothing can be changed from this page.</Help></h1>
+      <header className="page-head"><div><p className="eyebrow">Logs</p><h1>What the server is saying <Help big title="This page: Logs">Read the logs of every part of the server without logging in anywhere. Pick a source on the left. Live refreshes every 5 seconds; Errors shows only lines with errors and warnings; the filter box finds text. Red lines are errors, amber are warnings. Logs are read-only here: nothing can be changed from this page.</Help></h1>
         <p className="lede">Pick a source to read its newest lines.</p></div></header>
       {!hostOk && <p className="message error">The host agent is not installed yet, so only Proxmox tasks are available. Ask Claude to run host-agent-setup.sh.</p>}
       <div className="logs">
@@ -285,7 +285,7 @@ export function UpdatesPage({ pass }: { pass: string }) {
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   return (
     <>
-      <header className="hero"><div><p className="eyebrow">Updates</p><h1>Keep everything patched <Help big title="This page: Updates">Shows which machines have system updates waiting (Debian packages, including security fixes). <b>Check now</b> asks every running container and the Proxmox host. <b>Update</b> installs them: a snapshot named pre-update-… is taken first, so a bad update can be rolled back in Proxmox. The Proxmox host itself is updated from its own web UI (Node → Updates), because a host update can need a reboot. Jacob's app (102) is never touched.</Help></h1>
+      <header className="page-head"><div><p className="eyebrow">Updates</p><h1>Keep everything patched <Help big title="This page: Updates">Shows which machines have system updates waiting (Debian packages, including security fixes). <b>Check now</b> asks every running container and the Proxmox host. <b>Update</b> installs them: a snapshot named pre-update-… is taken first, so a bad update can be rolled back in Proxmox. The Proxmox host itself is updated from its own web UI (Node → Updates), because a host update can need a reboot. Jacob's app (102) is never touched.</Help></h1>
         <p className="lede">{!targets ? 'Loading…' : !rows.length ? 'Nothing checked yet. Press Check now.' : `${total} update${total === 1 ? '' : 's'} waiting${checked ? `, last checked ${new Date(checked).toLocaleString()}` : ''}.`}</p></div>
         <span className="with-help"><button type="button" className="primary" disabled={busy} onClick={() => void start('./api/updates/check')}>{busy && job?.kind === 'updates-check' ? 'Checking…' : 'Check now'}</button><Help title="Check now">Runs apt update in every running container and on the host, then counts what can be upgraded. Takes a minute or two.</Help></span>
       </header>
