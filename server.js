@@ -624,6 +624,82 @@ app.get('/api/logs/:key', async (request, response) => {
   } catch (error) { return fail(response, error); }
 });
 
+// ---------- agents hub (CT 111, Mission Control) ----------
+// The phone front door for the hub. The browser never talks to the hub and never sees its API key:
+// this server holds HUB_API_KEY and proxies. The key is admin on the hub, so every route here is
+// behind the main password (unlocked()), and only the fields the page needs are passed through.
+// CT 105 reaches the hub over the LAN at http://10.0.0.152:3005 (CT 105 has no Tailscale, and
+// MC_ALLOWED_HOSTS on the hub already lists 10.0.0.152, so the Host check passes).
+const hubCall = async (method, apiPath, body) => {
+  const base = (process.env.HUB_URL || '').replace(/\/$/, '');
+  const key = process.env.HUB_API_KEY || '';
+  if (!base || !key) throw Object.assign(new Error('The agents hub is not set up yet (HUB_URL and HUB_API_KEY in .env on FrontPage).'), { status: 503 });
+  const response = await fetch(base + apiPath, {
+    method,
+    signal: AbortSignal.timeout(12000),
+    headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || data.message || `Hub answered ${response.status}`), { status: response.status });
+  return data;
+};
+const rows = (data, key) => (Array.isArray(data) ? data : Array.isArray(data?.[key]) ? data[key] : []);
+// Mission Control is alpha and its schema may shift between releases, so read defensively and
+// never assume a field is there.
+const slimAgent = (a) => ({ id: a.id, name: a.name, role: a.role, status: a.status, last_seen: a.last_seen ?? null, last_activity: a.last_activity ?? '' });
+const slimTask = (t) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, assigned_to: t.assigned_to ?? null, updated_at: t.updated_at ?? t.created_at ?? null, tags: Array.isArray(t.tags) ? t.tags : [] });
+const slimActivity = (e) => ({ id: e.id, type: e.type, actor: e.actor ?? '', description: e.description ?? '', at: e.created_at ?? null });
+
+let hubCache = { at: 0, data: null };
+app.get('/api/hub', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  if (hubCache.data && Date.now() - hubCache.at < 5000) return response.json(hubCache.data);
+  try {
+    // One round trip for the phone: everything the page shows, in one response.
+    const [agents, tasks, activity] = await Promise.all([
+      hubCall('GET', '/api/agents?limit=50'),
+      hubCall('GET', '/api/tasks?limit=60'),
+      hubCall('GET', '/api/activities?limit=25'),
+    ]);
+    const data = {
+      agents: rows(agents, 'agents').map(slimAgent),
+      tasks: rows(tasks, 'tasks').map(slimTask),
+      activity: rows(activity, 'activities').map(slimActivity),
+      at: new Date().toISOString(),
+    };
+    hubCache = { at: Date.now(), data };
+    return response.json(data);
+  } catch (error) { return fail(response, error); }
+});
+
+const HUB_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+app.post('/api/hub/tasks', async (request, response) => {
+  if (!unlocked(request, response)) return;
+  const title = String(request.body?.title ?? '').trim();
+  const description = String(request.body?.description ?? '').trim();
+  const assigned = String(request.body?.assigned_to ?? '').trim();
+  const priority = String(request.body?.priority ?? 'medium').trim();
+  if (title.length < 3 || title.length > 200) return response.status(400).json({ message: 'Give the task a title of 3 to 200 characters.' });
+  if (description.length > 4000) return response.status(400).json({ message: 'That description is too long (4000 characters max).' });
+  if (!HUB_PRIORITIES.has(priority)) return response.status(400).json({ message: 'Priority must be low, medium, high or critical.' });
+  try {
+    // Only an agent the hub actually knows may be assigned, so a typo cannot park a task nowhere.
+    const known = rows(await hubCall('GET', '/api/agents?limit=50'), 'agents').map((a) => a.name);
+    if (assigned && !known.includes(assigned)) return response.status(400).json({ message: `Unknown agent "${assigned}".` });
+    const created = await hubCall('POST', '/api/tasks', {
+      title, description, priority,
+      status: assigned ? 'assigned' : 'inbox',
+      ...(assigned ? { assigned_to: assigned } : {}),
+      created_by: 'dashboard',
+      tags: ['from-dashboard'],
+    });
+    hubCache = { at: 0, data: null };
+    const task = created?.task ?? created;
+    return response.status(201).json({ task: slimTask(task) });
+  } catch (error) { return fail(response, error); }
+});
+
 // ---------- static site ----------
 app.use(express.static(path.join(__dirname, 'dist')));
 app.use((_request, response) => {

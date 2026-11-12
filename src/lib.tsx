@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import config from './config/services.json';
 
 // ---------- types ----------
-export type Page = 'overview' | 'services' | 'topology' | 'sites' | 'notes' | 'logs' | 'updates' | 'provision';
+export type Page = 'overview' | 'services' | 'topology' | 'sites' | 'notes' | 'logs' | 'updates' | 'provision' | 'agents';
 export type ProvisionType = 'vm' | 'lxc';
 export type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
 export type Host = { cpu: number; cpus: number; model: string; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; load: string[]; version: string };
@@ -12,6 +12,11 @@ export type Stats = { configured: boolean; node: string; host: Host; guests: Gue
 export type SiteState = { id: string; up: boolean; code: number; ms: number };
 export type Site = (typeof config.sites)[number];
 export type Route = { name: string; title: string; path: string; kind: string };
+// ---- agents hub (CT 111, Mission Control), served by ./api/hub ----
+export type HubAgent = { id: number; name: string; role: string; status: string; last_seen: number | null; last_activity: string };
+export type HubTask = { id: number; title: string; status: string; priority: string; assigned_to: string | null; updated_at: number | null; tags: string[] };
+export type HubEvent = { id: number; type: string; actor: string; description: string; at: number | null };
+export type HubData = { agents: HubAgent[]; tasks: HubTask[]; activity: HubEvent[]; at: string };
 export type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
 export type Item = { id: string; text: string; at: string; done?: boolean };
 export type Notes = { note: string; prompts: Item[]; todos: Item[]; updated: string | null };
@@ -25,6 +30,7 @@ export const pageForHash = (): Page => {
   if (route === 'notes') return 'notes';
   if (route === 'logs' || route.startsWith('logs/')) return 'logs';
   if (route === 'updates') return 'updates';
+  if (route === 'agents') return 'agents';
   return 'overview';
 };
 export const bytes = (n: number) => {
@@ -115,6 +121,7 @@ export const Icon = ({ name, className = 'icon' }: { name: string; className?: s
     unlock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 7.5-2" /></>,
     github: <path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6 0C6.8 2.3 5.8 2.6 5.8 2.6a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4.4 9c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" />,
     check: <><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" /></>,
+    bot: <><rect x="4" y="8" width="16" height="12" rx="3" /><path d="M12 4v4" /><circle cx="9" cy="14" r="1" /><circle cx="15" cy="14" r="1" /><path d="M2 13v3M22 13v3" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 };
