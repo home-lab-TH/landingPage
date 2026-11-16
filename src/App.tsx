@@ -11,8 +11,9 @@ const NotesPage = lazy(() => import('./pages/Notes'));
 const Provision = lazy(() => import('./pages/Provision'));
 const LogsPage = lazy(() => import('./ui/Ops').then((m) => ({ default: m.LogsPage })));
 const UpdatesPage = lazy(() => import('./ui/Ops').then((m) => ({ default: m.UpdatesPage })));
+const Agents = lazy(() => import('./pages/Agents'));
 
-const NAV: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['topology', 'Topology', 'map'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['updates', 'Updates', 'refresh'], ['provision', 'Create', 'plus']];
+const NAV: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['topology', 'Topology', 'map'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['updates', 'Updates', 'refresh'], ['agents', 'Agents', 'bot'], ['provision', 'Create', 'plus']];
 
 const Locked = ({ title, text, onLogin }: { title: string; text: string; onLogin: (p: string) => void }) => (
   <><header className="page-head"><h1>{title}</h1><p className="lede">{text}</p></header><Login onLogin={onLogin} /></>
@@ -74,6 +75,7 @@ export function App() {
           {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
           {page === 'updates' && (pass ? <UpdatesPage pass={pass} /> : <Locked title="Updates" text="Unlock to check and install updates." onLogin={setPass} />)}
           {page === 'logs' && (pass ? <LogsPage pass={pass} initial={logKey} /> : <Locked title="Logs" text="Unlock to read the server's logs." onLogin={setPass} />)}
+          {page === 'agents' && (pass ? <Agents query={q} pass={pass} /> : <Locked title="Agents" text="Unlock to see the agents hub and hand out tasks." onLogin={setPass} />)}
           {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
         </Suspense>
       </main>
