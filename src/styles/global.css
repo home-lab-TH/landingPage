@@ -420,3 +420,23 @@ details.more[open] summary { margin-bottom: 14px; }
   .ai-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
   .disk-facts { margin-left: 0; }
 }
+
+/* ---------- Command bar (Ctrl+K / Cmd+K) ---------- */
+.search .cmdk-hint { padding: 0; border: 0; background: transparent; color: inherit; line-height: 1; }
+.search .cmdk-hint:hover kbd, .search .cmdk-hint:focus-visible kbd { border-color: var(--acc-line); color: var(--acc); }
+.cmdk-back { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; background: rgba(5, 5, 6, .66); }
+.cmdk { width: min(560px, 100%); max-height: min(520px, 76vh); display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-md); box-shadow: 0 24px 60px rgba(0, 0, 0, .6); }
+.cmdk-field { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 48px; border-bottom: 1px solid var(--line); color: var(--dim); }
+.cmdk-field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font-size: 15px; }
+.cmdk kbd { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 5px; color: var(--dim); }
+.cmdk-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+.cmdk-group { padding: 10px 10px 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.cmdk-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r-sm); border: 1px solid transparent; cursor: pointer; color: var(--fg-2); }
+.cmdk-item.on { background: var(--card); border-color: var(--acc-line); color: var(--fg); }
+.cmdk-item.on .icon { color: var(--acc); }
+.cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-item small { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.cmdk-empty { padding: 18px 10px; text-align: center; }
+.cmdk-foot { display: flex; gap: 16px; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11px; color: var(--dim); }
+.cmdk-foot kbd { margin-right: 4px; }
+@media (max-width: 640px) { .cmdk-back { padding-top: 8vh; } .cmdk-foot { display: none; } .cmdk-item small { display: none; } }

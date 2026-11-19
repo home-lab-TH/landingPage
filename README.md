@@ -1,70 +1,61 @@
-<div align="center"><img src = "https://user-images.githubusercontent.com/31413093/197097625-5b3bd3cf-2bd6-4a3a-8059-a1fe9f28100b.svg" height="100px" alt="My Happy SVG"/></div>
+# Homelab Dashboard
 
-<h2 align="center">template-vite-react-ts-tailwind</h2>
+A phone-friendly dashboard for one Proxmox server. It shows live status for the host, containers, VMs and the web apps running on them, and (after unlocking with the dashboard password) can create, power-cycle and delete guests, manage site routes, read logs and apply updates.
 
-<div align="center">
-<a href="https://reactjs.org/"><image src="https://img.shields.io/static/v1?label=React&message=19.1.1&style=for-the-badge&labelColor=FFFFFF&logo=react&color=61DAFB"/></a> <a href="https://www.typescriptlang.org/"><image src="https://img.shields.io/static/v1?label=TypeScript&message=5.8.3&style=for-the-badge&labelColor=FFFFFF&logo=typescript&color=3178C6"/></a> <a href="https://tailwindcss.com/"><image src="https://img.shields.io/static/v1?label=Tailwind%20CSS&message=4.1.12&style=for-the-badge&labelColor=FFFFFF&logo=tailwindcss&color=06B6D4"/></a> <a href="https://vite.dev/"><image src="https://img.shields.io/static/v1?label=Vite&message=7.1.4&style=for-the-badge&labelColor=FFFFFF&logo=vite&color=646CFF"/></a>
-</div>
+It runs on CT 105 ("FrontPage") and is installable as a phone app (PWA).
 
-## Introduction
+## Pages
 
-A starter [Vite](https://vitejs.dev/) template having:
+| Page | What it does |
+| --- | --- |
+| Overview | Host CPU / memory / disk, every guest with power and log shortcuts, uptime and history graphs |
+| Services | The apps in `services.json` grouped by owner, with live up / down checks |
+| Topology | Map of containers, addresses and what runs in each |
+| Sites | Reverse-proxy routes, WordPress and AI-built sites (unlock to edit) |
+| Notes | Shared scratch note, prompts and to-dos |
+| Logs | Proxmox tasks and container / app logs (unlock) |
+| Updates | Check and install OS updates (unlock) |
+| Agents | The agents hub on CT 111: agents, tasks, activity (unlock) |
+| Create | Provision a new LXC / VM, WordPress site or AI-built site (unlock) |
 
-- [React](https://react.dev/)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- Multiple [Oxc](https://oxc.rs) recommended rules are configured
+Press `Ctrl+K` / `Cmd+K` for the command bar (jump to any page, site or container), and `/` to search the current page.
 
-> [!IMPORTANT]
-> 
-> The latest code of this template has updated Vite to version 7.0+, which requires [Node.js](https://nodejs.org/) version 20.19+ or 22.12+. Please upgrade if your package manager warns about it. Or you can use [this release](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/releases/tag/release-2025.03.27) which is vite@5 and works with Node.js 18 or 20.
-> 
-> 该模板的最新代码中，已经将 Vite 的版本更新到了 7.0+，需要 20.19+ 或 22.12+ 版本的 [Node.js](https://nodejs.org/)。当你的包管理器发出警告时，请注意升级你的 Node.js 版本。如果你需要 vite@5，请使用[这个版本](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/releases/tag/release-2025.03.27)，可兼容 Node.js 18 或 20。
+## Architecture
 
-> [!TIP]
-> 
-> This code repository may occasionally update its dependency versions. If the dependency versions in the latest code do not meet your expectations, please go to [Tags](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/tags) section to download a previous version of this template. I will display the dependencies used in each Tag, please choose the one you need.
-> 
-> 这个代码仓库可能会不定期更新其依赖包的版本。如果最新代码中依赖的版本不符合你的期望，请移步[Tags](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/tags)下载之前的模板。每个Tag中使用的依赖都会展示在Tag详情中，请选择你需要的版本。
+- **Frontend:** React 19 + TypeScript, built with Vite. Plain CSS in `src/styles/global.css` (no CSS framework, no web fonts, no canvas). Pages other than Overview are lazy-loaded.
+- **Backend:** `server.js`, a single Express 5 app. It serves `dist/` and a JSON API, and talks to the Proxmox API with an API token, plus the proxy agent, site agent, host agent and agents hub over the LAN.
+- **Config:** `src/config/services.json` lists sites, members, container stacks and addresses. The server and the UI both read it.
+- **PWA:** `public/manifest.webmanifest`, `public/icon.svg` and `public/sw.js`. The service worker is network-first and never caches `/api/*`.
 
-## Usage
+Public API routes other sites depend on: `/api/ping`, `/api/stats`, `/api/services`, `/api/history`, `/api/uptime`. Do not break them.
 
-> [!TIP]
-> 
-> The fastest way to use this template is to click the “Use this template” button on the top right of this repository. It will help you create a new repository quickly, and you can make any modifications to your own repository. If you still want to download this template separately, please continue reading.
-> 
-> 使用该模板的最快方式，就是点击本仓库右上角的“使用该模板”按扭。这帮助你使用该模板迅速创建一个新的仓库，然后你可以对自己的仓库进行任何修改。如果你仍然希望单独下载此模板，可继续往下读。
-
-If you need a copy of this repository. You can [download](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/archive/refs/heads/main.zip) a copy as zip but [tiged](https://github.com/tiged/tiged) is recommended.
-
-After you installed tiged, please excute the following commands:
+## Develop
 
 ```sh
-$ cd path-to-save-your-project
-$ tiged royrao2333/template-vite-react-ts-tailwind your-project-name
+npm ci
+npm run build     # tsc -b && vite build -> dist/
+npm start         # node server.js (reads .env), http://localhost:3000
+npm run dev       # Vite dev server (no API)
+npm run lint
 ```
 
-After getting a copy of this repository, you can use your package manager to install dependecies:
+## Configuration
 
-```sh
-$ cd path-to-your-project
-$ pnpm install
+Copy `.env.example` to `.env` and fill it in. Never commit `.env`. Variable names:
 
-# npm install
-# yarn install
-```
+- Server: `PORT`
+- Proxmox: `PROXMOX_URL`, `PROXMOX_NODE`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, `PROXMOX_READ_TOKEN_ID`, `PROXMOX_READ_TOKEN_SECRET`, `PROXMOX_INSECURE_TLS`
+- Create / delete: `DASHBOARD_PASSWORD` (alias `PROVISION_PASSWORD`), `PROXMOX_LXC_OSTEMPLATE`, `PROXMOX_STORAGE`, `PROXMOX_BRIDGE`, `PROXMOX_VM_TEMPLATE`
+- Sites page: `PROXY_AGENT_URL`, `PROXY_AGENT_TOKEN`, `SITE_AGENT_URL`, `SITE_AGENT_TOKEN`
+- Logs / updates: `HOST_AGENT_URL`, `HOST_AGENT_TOKEN`
+- Agents page: `HUB_URL`, `HUB_API_KEY`
+- Notes: `NOTES_FILE`
 
-Let's run!
+## Deploy
 
-```sh
-$ pnpm run dev
+Pushing to `main` runs `.github/workflows/deploy.yml`:
 
-# npm run dev
-# yarn run dev
-```
+1. GitHub builds the site (`npm run build`) and uploads `dist/`, `server.js`, `services.json` and the package files.
+2. The self-hosted `frontpage` runner on CT 105 syncs them into `/opt/landingPage` (keeping `.env`, `node_modules` and `data/`), runs `npm ci --omit=dev`, restarts the `landing-page` pm2 process and waits for `/api/ping`.
 
-> We've already implemented some recommended configurations in `.oxlintrc.json`, `.oxfmtrc.json`. Feel free to edit them if you have your own preferences.
-
-## Contributing
-
-Feel free to dive in! [Open an issue](https://github.com/RoyRao2333/template-vite-react-ts-tailwind/issues/new) or submit PRs.
+Other branches and pull requests only run the CI build check (`.github/workflows/ci.yml`).

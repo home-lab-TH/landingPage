@@ -701,7 +701,8 @@ app.post('/api/hub/tasks', async (request, response) => {
 });
 
 // ---------- static site ----------
-app.use(express.static(path.join(__dirname, 'dist')));
+// sw.js must always be revalidated so a new deploy is picked up; manifest.webmanifest and icon.svg are plain static files.
+app.use(express.static(path.join(__dirname, 'dist'), { setHeaders: (res, file) => { if (file.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache'); } }));
 app.use((_request, response) => {
   response.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });

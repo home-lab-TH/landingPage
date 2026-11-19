@@ -49,6 +49,38 @@
         "Docker",
         "MongoDB"
       ]
+    },
+    {
+      "id": "news",
+      "title": "News Reader",
+      "description": "Local news feed from RSS, stored in MongoDB.",
+      "url": "./news/",
+      "check": "http://10.0.0.250/news/",
+      "icon": "NW",
+      "ct": 110,
+      "owner": "avraham",
+      "repo": "https://github.com/lakylaky963/local-news",
+      "tags": [
+        "Node.js",
+        "RSS",
+        "MongoDB"
+      ]
+    },
+    {
+      "id": "portfolio",
+      "title": "Portfolio",
+      "description": "Personal portfolio with live server stats.",
+      "url": "./portfolio/",
+      "check": "http://10.0.0.250/portfolio/",
+      "icon": "PF",
+      "ct": 101,
+      "owner": "avraham",
+      "repo": "https://github.com/lakylaky963/portfolio",
+      "tags": [
+        "Static",
+        "EN / HE",
+        "Live Stats"
+      ]
     }
   ],
   "members": [
@@ -104,6 +136,13 @@
       "wordpress",
       "mariadb",
       "site agent"
+    ],
+    "110": [
+      "news · node 22"
+    ],
+    "111": [
+      "agents-hub · node 22",
+      "cron agents"
     ]
   },
   "links": [
@@ -129,6 +168,8 @@
     "105": "10.0.0.223",
     "106": "10.0.0.230",
     "107": "10.0.0.240",
-    "108": "10.0.0.226"
+    "108": "10.0.0.226",
+    "110": "10.0.0.151",
+    "111": "10.0.0.152"
   }
 }

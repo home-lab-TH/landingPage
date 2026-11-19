@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import Overview from './pages/Overview';
 import Services from './pages/Services';
+import { CommandBar } from './ui/CommandBar';
 import { Icon, Login, pageForHash, readPass, savePass, usePoll } from './lib';
 import type { Page, Route, SiteState, Stats } from './lib';
 
@@ -15,6 +16,8 @@ const Agents = lazy(() => import('./pages/Agents'));
 
 const NAV: [Page, string, string][] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['topology', 'Topology', 'map'], ['sites', 'Sites', 'pulse'], ['notes', 'Notes', 'note'], ['logs', 'Logs', 'list'], ['updates', 'Updates', 'refresh'], ['agents', 'Agents', 'bot'], ['provision', 'Create', 'plus']];
 
+const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform);
+
 const Locked = ({ title, text, onLogin }: { title: string; text: string; onLogin: (p: string) => void }) => (
   <><header className="page-head"><h1>{title}</h1><p className="lede">{text}</p></header><Login onLogin={onLogin} /></>
 );
@@ -24,6 +27,7 @@ export function App() {
   const [logKey, setLogKey] = useState(() => window.location.hash.match(/^#\/?logs\/([a-z0-9-]+)/)?.[1] ?? '');
   const [query, setQuery] = useState('');
   const [pass, setPass] = useState(readPass);
+  const [bar, setBar] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const { data: stats, error: statsError } = usePoll<Stats>('./api/stats', 5000);
   const { data: siteData } = usePoll<{ results: SiteState[] }>('./api/services', 30000);
@@ -33,6 +37,7 @@ export function App() {
   useEffect(() => {
     const onHash = () => { setPage(pageForHash()); const m = window.location.hash.match(/^#\/?logs\/([a-z0-9-]+)/); if (m) setLogKey(m[1]); window.scrollTo(0, 0); };
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setBar((open) => !open); return; }
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
       if (e.key === '/' && !typing) { e.preventDefault(); search.current?.focus(); }
       if (e.key === 'Escape' && document.activeElement === search.current) { setQuery(''); search.current?.blur(); }
@@ -56,6 +61,7 @@ export function App() {
           <Icon name="search" />
           <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search this page" />
           <kbd>/</kbd>
+          <button type="button" className="cmdk-hint" onClick={() => setBar(true)} title="Jump to a page, site or container" aria-label="Open the command bar"><kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd></button>
         </label>
         {pass
           ? <button type="button" className="btn lock on" onClick={lock} title="Lock the controls"><Icon name="unlock" />Lock</button>
@@ -79,6 +85,7 @@ export function App() {
           {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
         </Suspense>
       </main>
+      {bar && <CommandBar nav={NAV} stats={stats} onClose={() => setBar(false)} />}
       <footer className="foot">
         <span>Homelab · Proxmox · Docker · Tailscale</span>
         <a href="https://github.com/lakylaky963/homelab-ops" target="_blank" rel="noreferrer"><Icon name="github" className="icon-xs" />homelab-ops</a>
