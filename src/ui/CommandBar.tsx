@@ -7,7 +7,7 @@ import type { Stats } from '../lib';
 type Entry = { id: string; group: 'Pages' | 'Sites' | 'Containers'; label: string; hint: string; icon: string; run: () => void };
 
 // Ctrl+K / Cmd+K jump bar: pages, sites and live Proxmox guests. No dependencies.
-export function CommandBar({ nav, stats, onClose }: { nav: [string, string, string][]; stats?: Stats | null; onClose: () => void }) {
+export function CommandBar({ nav, stats, pass, onClose }: { nav: [string, string, string][]; stats?: Stats | null; pass: string; onClose: () => void }) {
   const [q, setQ] = useState('');
   const [at, setAt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -17,13 +17,13 @@ export function CommandBar({ nav, stats, onClose }: { nav: [string, string, stri
     const go = (hash: string) => () => { window.location.hash = hash; };
     const pages = nav.map(([id, label, icon]): Entry => ({ id: `page-${id}`, group: 'Pages', label, hint: `#/${id === 'overview' ? '' : id}`, icon, run: go(`#/${id === 'overview' ? '' : id}`) }));
     const sites = config.sites.map((s): Entry => ({ id: `site-${s.id}`, group: 'Sites', label: s.title, hint: `CT ${s.ct} · open site`, icon: 'external', run: () => { window.open(new URL(s.url, window.location.href).href, '_blank', 'noopener'); } }));
-    const guests = (stats?.guests ?? []).map((g): Entry => ({
+    const guests = (pass ? stats?.guests ?? [] : []).map((g): Entry => ({
       id: `guest-${g.id}`, group: 'Containers', label: g.name, icon: g.type === 'vm' ? 'box' : 'server',
       hint: `${g.type === 'vm' ? 'VM' : 'CT'} ${g.id} · ${g.status}${g.type === 'lxc' ? ' · logs' : ' · topology'}`,
       run: go(g.type === 'lxc' ? `#/logs/ct-${g.id}` : '#/topology'),
     }));
     return [...pages, ...sites, ...guests];
-  }, [nav, stats]);
+  }, [nav, stats, pass]);
 
   const results = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -54,7 +54,7 @@ export function CommandBar({ nav, stats, onClose }: { nav: [string, string, stri
       <div className="cmdk" role="dialog" aria-modal="true" aria-label="Command bar" onKeyDown={onKey}>
         <label className="cmdk-field">
           <Icon name="search" />
-          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Jump to a page, site or container" aria-label="Search pages, sites and containers" autoComplete="off" spellCheck={false} />
+          <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder={pass ? 'Jump to a page, site or container' : 'Jump to a page or site'} aria-label={pass ? 'Search pages, sites and containers' : 'Search pages and sites'} autoComplete="off" spellCheck={false} />
           <kbd>Esc</kbd>
         </label>
         <ul className="cmdk-list" ref={list} role="listbox" aria-label="Results">

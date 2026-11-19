@@ -143,7 +143,7 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
       {statsError && statsError.code === 503 && <SetupNotice message={statsError.message} />}
       {statsError && statsError.code !== 503 && <section className="panel notice error"><h2>Can't read server stats</h2><p>{statsError.message}</p></section>}
 
-      {fresh.length > 0 && (
+      {pass && fresh.length > 0 && (
         <section className="panel notice new-guests">
           <h2><span className="pill new">New</span>{fresh.length === 1 ? 'A new guest appeared' : `${fresh.length} new guests appeared`}</h2>
           <p>{fresh.map((g) => `${g.name} (${g.id})`).join(', ')}</p>
@@ -168,33 +168,49 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
             })}
           </ul>
         </section>
-        <section className="panel">
-          <div className="panel-head"><h2><Icon name="disk" />Storage</h2></div>
-          {(stats?.storage ?? []).map((s) => (
-            <div className="storage" key={s.name}>
-              <div className="row"><strong>{s.name}</strong><span className="mono dim">{bytes(s.used)} / {bytes(s.total)}</span></div>
-              <Bar value={ratio(s.used, s.total)} />
-            </div>
-          ))}
-          {!stats && <p className="muted">Waiting for Proxmox…</p>}
-        </section>
+        {pass ? (
+          <section className="panel">
+            <div className="panel-head"><h2><Icon name="disk" />Storage</h2></div>
+            {(stats?.storage ?? []).map((s) => (
+              <div className="storage" key={s.name}>
+                <div className="row"><strong>{s.name}</strong><span className="mono dim">{bytes(s.used)} / {bytes(s.total)}</span></div>
+                <Bar value={ratio(s.used, s.total)} />
+              </div>
+            ))}
+            {!stats && <p className="muted">Waiting for Proxmox…</p>}
+          </section>
+        ) : (
+          <section className="panel">
+            <div className="panel-head"><h2><Icon name="disk" />Public status</h2></div>
+            <p className="muted">You're viewing the public status page. Storage, container details, health sensors and controls are hidden until unlocked.</p>
+            <a className="link" href="#/provision">Unlock →</a>
+          </section>
+        )}
       </div>
 
       {stats && <HistoryPanel />}
-      <HealthPanel pass={pass} />
+      {pass && <HealthPanel pass={pass} />}
 
+      {!pass ? (
+        <section className="panel">
+          <div className="panel-head"><h2><Icon name="box" />Containers and VMs <span className="count">{running}/{stats?.guests.length ?? 0}</span></h2></div>
+          <p className="muted">{running} of {stats?.guests.length ?? 0} running. Internal container details, IPs, storage, logs and controls are hidden until unlocked.</p>
+          <a className="link" href="#/provision">Unlock →</a>
+        </section>
+      ) : (
       <section className="panel">
-        <div className="panel-head">
-          <h2><Icon name="box" />Containers and VMs <span className="count">{query ? `${guests.length} match` : `${running}/${stats?.guests.length ?? 0}`}</span>
-            <Help title="Containers and VMs">Unlock to open logs (≡), restart (↻), stop (■) or start (▶). Jacob's app (102) is never touched; the proxy (101) and this dashboard (105) can't be stopped here.</Help></h2>
-          <a href="#/topology" className="link">Topology →</a>
-        </div>
-        {note && <p className="message success">{note}</p>}
-        <div className="guests">
-          {guests.map((g) => <GuestCard key={g.id} g={g} pass={pass} busy={busy === g.id} isNew={fresh.some((f) => f.id === g.id)} onPower={(x, a) => void power(x, a)} onRemove={(x) => void remove(x)} />)}
-        </div>
-        {stats && guests.length === 0 && <p className="muted">Nothing matches "{query}".</p>}
-      </section>
+          <div className="panel-head">
+            <h2><Icon name="box" />Containers and VMs <span className="count">{query ? `${guests.length} match` : `${running}/${stats?.guests.length ?? 0}`}</span>
+              <Help title="Containers and VMs">Unlock to open logs (≡), restart (↻), stop (■) or start (▶). Jacob's app (102) is never touched; the proxy (101) and this dashboard (105) can't be stopped here.</Help></h2>
+            <a href="#/topology" className="link">Topology →</a>
+          </div>
+          {note && <p className="message success">{note}</p>}
+          <div className="guests">
+            {guests.map((g) => <GuestCard key={g.id} g={g} pass={pass} busy={busy === g.id} isNew={fresh.some((f) => f.id === g.id)} onPower={(x, a) => void power(x, a)} onRemove={(x) => void remove(x)} />)}
+          </div>
+          {stats && guests.length === 0 && <p className="muted">Nothing matches "{query}".</p>}
+        </section>
+      )}
     </>
   );
 }

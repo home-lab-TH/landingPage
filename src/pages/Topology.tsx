@@ -6,19 +6,19 @@ import type { Guest, Stats } from '../lib';
 
 // Hand-drawn SVG map of how traffic reaches each container. Drag nodes to arrange; positions stay in this browser.
 type N = { id: string; label: string; sub: string; x: number; y: number; kind: 'edge' | 'proxy' | 'guest' | 'db'; guest?: Guest };
-const W = 1000; const H = 620;
+const W = 1000; const H = 670;
 const POS_KEY = 'homelab-topology';
 const network = config.network as Record<string, string>;
 const stacks = config.stacks as Record<string, string[]>;
-const ROUTED = [105, 100, 103, 102, 108];
+const ROUTED = [105, 100, 103, 102, 108, 110];
 const DEFAULTS: Record<string, [number, number]> = {
   internet: [90, 310], '101': [300, 310],
-  '105': [560, 110], '100': [560, 220], '103': [560, 330], '102': [560, 440], '108': [560, 550],
-  '106': [830, 275], '107': [830, 440], '104': [830, 550],
+  '105': [560, 110], '100': [560, 220], '103': [560, 330], '102': [560, 440], '108': [560, 550], '110': [560, 620],
+  '106': [830, 275], '107': [830, 440], '104': [830, 550], '111': [830, 620],
 };
 const readPos = (): Record<string, [number, number]> => { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch { return {}; } };
 
-export default function Topology({ stats }: { stats: Stats | null }) {
+export default function Topology({ stats, pass }: { stats: Stats | null; pass: string }) {
   const [pos, setPos] = useState<Record<string, [number, number]>>(readPos);
   const [picked, setPicked] = useState<string>('101');
   const svg = useRef<SVGSVGElement>(null);
@@ -31,13 +31,13 @@ export default function Topology({ stats }: { stats: Stats | null }) {
     for (const g of [...guests].sort((a, b) => a.id - b.id)) {
       const id = String(g.id);
       const def = DEFAULTS[id] ?? [830, 110 + (extra++) * 80];
-      list.push({ id, label: g.name, sub: `CT ${g.id}`, x: def[0], y: def[1], kind: g.id === 101 ? 'proxy' : g.id === 106 ? 'db' : 'guest', guest: g });
+      list.push({ id, label: g.name, sub: pass ? `CT ${g.id}` : g.id === 101 ? 'proxy' : g.id === 106 ? 'database' : 'service', x: def[0], y: def[1], kind: g.id === 101 ? 'proxy' : g.id === 106 ? 'db' : 'guest', guest: g });
     }
     return list.map((n) => { const p = pos[n.id] ?? DEFAULTS[n.id] ?? [n.x, n.y]; return { ...n, x: p[0], y: p[1] }; });
-  }, [stats, pos]);
+  }, [stats, pos, pass]);
 
   const by = Object.fromEntries(nodes.map((n) => [n.id, n]));
-  const links: [string, string, string?][] = [['internet', '101', 'https'], ...ROUTED.map((id): [string, string] => ['101', String(id)]), ['100', '106', 'mongo'], ['103', '106', 'mongo']];
+  const links: [string, string, string?][] = [['internet', '101', 'https'], ...ROUTED.map((id): [string, string] => ['101', String(id)]), ['100', '106', 'mongo'], ['103', '106', 'mongo'], ['110', '106', 'mongo']];
 
   const toSvg = (e: RPointerEvent) => {
     const m = svg.current?.getScreenCTM();
@@ -75,7 +75,7 @@ export default function Topology({ stats }: { stats: Stats | null }) {
         <section className="panel topo-map">
           <div className="panel-head"><h2><Icon name="map" />Network</h2><button type="button" className="ghost" onClick={reset}>Reset layout</button></div>
           <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="topo-svg" role="img" aria-label="Network map">
-            <rect x="200" y="20" width="780" height="580" rx="18" className="host-frame" />
+            <rect x="200" y="20" width="780" height="630" rx="18" className="host-frame" />
             <text x="222" y="48" className="host-label">Proxmox · {stats?.node ?? 'server'}</text>
             {links.map(([a, b, label]) => {
               const A = by[a]; const B = by[b]; if (!A || !B) return null;
@@ -107,7 +107,7 @@ export default function Topology({ stats }: { stats: Stats | null }) {
           {!sel && <p className="muted">Click a node.</p>}
           {sel && (
             <>
-              <p className="eyebrow">{sel.kind === 'edge' ? 'Entry point' : sel.sub}</p>
+              <p className="eyebrow">{sel.kind === 'edge' ? 'Entry point' : pass ? sel.sub : sel.sub}</p>
               <h2>{sel.label}</h2>
               {sel.kind === 'edge' ? (
                 <p className="muted">Public traffic arrives over Tailscale Funnel at central-proxy.bluebuck-tailor.ts.net and is routed by nginx on CT 101.</p>
@@ -115,14 +115,16 @@ export default function Topology({ stats }: { stats: Stats | null }) {
                 <>
                   <dl className="facts">
                     <dt>Status</dt><dd>{g.status}</dd>
-                    <dt>Address</dt><dd className="mono">{network[sel.id] ?? '–'}</dd>
+                    {pass && <><dt>Address</dt><dd className="mono">{network[sel.id] ?? '–'}</dd></>}
                     <dt>Uptime</dt><dd>{g.status === 'running' ? duration(g.uptime) : '–'}</dd>
-                    <dt>CPU</dt><dd className="mono">{pct(g.cpu)}</dd>
-                    <dt>Memory</dt><dd className="mono">{bytes(g.mem)} / {bytes(g.maxmem)}</dd>
-                    <dt>Disk</dt><dd className="mono">{pct(ratio(g.disk, g.maxdisk))}</dd>
+                    {pass && <>
+                      <dt>CPU</dt><dd className="mono">{pct(g.cpu)}</dd>
+                      <dt>Memory</dt><dd className="mono">{bytes(g.mem)} / {bytes(g.maxmem)}</dd>
+                      <dt>Disk</dt><dd className="mono">{pct(ratio(g.disk, g.maxdisk))}</dd>
+                    </>}
                   </dl>
                   {stacks[sel.id] && <div className="chips">{stacks[sel.id].map((c) => <span key={c} className="chip">{c}</span>)}</div>}
-                  <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a>
+                  {pass ? <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a> : <a className="link muted" href="#/provision">Unlock for IP, metrics &amp; logs →</a>}
                 </>
               )}
             </>

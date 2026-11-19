@@ -76,7 +76,7 @@ export function App() {
         <Suspense fallback={<p className="muted loading">Loading…</p>}>
           {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={pass} />}
           {page === 'services' && <Services query={q} sites={sites} />}
-          {page === 'topology' && <Topology stats={stats} />}
+          {page === 'topology' && <Topology stats={stats} pass={pass} />}
           {page === 'sites' && <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={setPass} />}
           {page === 'notes' && <NotesPage query={q} pass={pass} onLogin={setPass} />}
           {page === 'updates' && (pass ? <UpdatesPage pass={pass} /> : <Locked title="Updates" text="Unlock to check and install updates." onLogin={setPass} />)}
@@ -85,7 +85,7 @@ export function App() {
           {page === 'provision' && <Provision pass={pass} onLogin={setPass} />}
         </Suspense>
       </main>
-      {bar && <CommandBar nav={NAV} stats={stats} onClose={() => setBar(false)} />}
+      {bar && <CommandBar nav={NAV} stats={stats} pass={pass} onClose={() => setBar(false)} />}
       <footer className="foot">
         <span>Homelab · Proxmox · Docker · Tailscale</span>
         <a href="https://github.com/lakylaky963/homelab-ops" target="_blank" rel="noreferrer"><Icon name="github" className="icon-xs" />homelab-ops</a>
