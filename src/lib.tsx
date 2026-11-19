@@ -57,6 +57,8 @@ export type AuthMeResponse = {
   needsBootstrap: boolean;
   allowLegacyPassword: boolean;
   user: AuthUser | null;
+  error?: string;
+  message?: string;
 };
 
 export type AdminUser = AuthUser & {
@@ -277,24 +279,31 @@ export const Login = ({
   const [meta, setMeta] = useState<{ needsBootstrap: boolean; allowLegacyPassword: boolean; ready: boolean }>({
     needsBootstrap: needsBootstrapProp ?? false,
     allowLegacyPassword: allowLegacyProp ?? true,
-    ready: needsBootstrapProp !== undefined && allowLegacyProp !== undefined,
+    ready: needsBootstrapProp !== undefined,
   });
   // SSO login fields
+  const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // Player registration fields
+  const [regHandle, setRegHandle] = useState('');
+  const [regPin, setRegPin] = useState('');
+  const [regAvatar, setRegAvatar] = useState<string>('netrunner');
   // Bootstrap fields
   const [bootUsername, setBootUsername] = useState('owner');
   const [bootDisplayName, setBootDisplayName] = useState('Owner');
   const [bootPassword, setBootPassword] = useState('');
+  const [bootConfirmPassword, setBootConfirmPassword] = useState('');
   const [mainPassword, setMainPassword] = useState('');
   // Legacy fallback field
   const [legacyValue, setLegacyValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [legacyError, setLegacyError] = useState('');
 
   useEffect(() => {
-    if (needsBootstrapProp !== undefined && allowLegacyProp !== undefined) {
-      setMeta({ needsBootstrap: needsBootstrapProp, allowLegacyPassword: allowLegacyProp, ready: true });
+    if (needsBootstrapProp !== undefined) {
+      setMeta({ needsBootstrap: needsBootstrapProp, allowLegacyPassword: allowLegacyProp ?? true, ready: true });
       return undefined;
     }
     let alive = true;
@@ -317,16 +326,21 @@ export const Login = ({
         if (alive) setMeta((prev) => ({ ...prev, ready: true }));
       });
     return () => { alive = false; };
-  }, [needsBootstrapProp, allowLegacyProp]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [needsBootstrapProp, allowLegacyProp, onAuthMeta]);
 
   const submitSso = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    const cleanUser = username.trim();
+    if (!cleanUser) {
+      setError('Username is required.');
+      return;
+    }
     setBusy(true);
     try {
       const data = await apiJson<{ ok: boolean; token?: string; user: AuthUser }>('./api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ username: cleanUser, password }),
       });
       savePass('');
       onLogin('__sso__', data.user);
@@ -337,16 +351,56 @@ export const Login = ({
     }
   };
 
+  const submitRegister = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    const cleanHandle = regHandle.trim();
+    if (cleanHandle.length < 2) {
+      setError('Handle must be at least 2 characters (letters, digits, space, _ - .).');
+      return;
+    }
+    if (!/^\d{4,8}$/.test(regPin)) {
+      setError('PIN must be 4–8 numeric digits.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await apiJson<{ ok: boolean; created: boolean; token?: string; user: AuthUser }>('./api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: cleanHandle,
+          pin: regPin,
+          avatar: regAvatar,
+        }),
+      });
+      savePass('');
+      onLogin('__sso__', data.user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Registration failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitBootstrap = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    const cleanUser = bootUsername.trim();
+    if (cleanUser.length < 2) {
+      setError('Username must be at least 2 non-space characters.');
+      return;
+    }
+    if (bootPassword !== bootConfirmPassword) {
+      setError('Owner passwords do not match.');
+      return;
+    }
     setBusy(true);
     try {
       const data = await apiJson<{ ok: boolean; user: AuthUser }>('./api/auth/bootstrap', {
         method: 'POST',
         body: JSON.stringify({
-          username: bootUsername.trim(),
-          displayName: bootDisplayName.trim() || bootUsername.trim(),
+          username: cleanUser,
+          displayName: bootDisplayName.trim() || cleanUser,
           password: bootPassword,
           mainPassword,
         }),
@@ -362,7 +416,7 @@ export const Login = ({
 
   const submitLegacy = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError('');
+    setLegacyError('');
     setBusy(true);
     try {
       const response = await fetch('./api/login', {
@@ -375,7 +429,7 @@ export const Login = ({
       savePass(legacyValue);
       onLogin(legacyValue);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Login failed.');
+      setLegacyError(e instanceof Error ? e.message : 'Login failed.');
     } finally {
       setBusy(false);
     }
@@ -384,7 +438,7 @@ export const Login = ({
   if (!meta.ready) {
     return (
       <div className="panel form login">
-        <p className="muted"><span className="spinner" /> Checking access status…</p>
+        <p className="muted"><span className="spinner" /> Checking session…</p>
       </div>
     );
   }
@@ -423,22 +477,39 @@ export const Login = ({
             />
           </label>
         </div>
-        <label>
-          New Owner password
-          <input
-            type="password"
-            required
-            minLength={6}
-            autoComplete="new-password"
-            value={bootPassword}
-            onChange={(e) => setBootPassword(e.target.value)}
-            placeholder="6+ characters (8+ recommended)"
-          />
-        </label>
+        <div className="pair">
+          <label>
+            New Owner password
+            <input
+              type="password"
+              required
+              minLength={6}
+              maxLength={128}
+              autoComplete="new-password"
+              value={bootPassword}
+              onChange={(e) => setBootPassword(e.target.value)}
+              placeholder="6+ characters (8+ recommended)"
+            />
+          </label>
+          <label>
+            Confirm Owner password
+            <input
+              type="password"
+              required
+              minLength={6}
+              maxLength={128}
+              autoComplete="new-password"
+              value={bootConfirmPassword}
+              onChange={(e) => setBootConfirmPassword(e.target.value)}
+              placeholder="Repeat password"
+            />
+          </label>
+        </div>
         <label>
           Existing main dashboard password
           <input
             type="password"
+            maxLength={128}
             autoComplete="current-password"
             value={mainPassword}
             onChange={(e) => setMainPassword(e.target.value)}
@@ -448,46 +519,127 @@ export const Login = ({
         <button className="primary" type="submit" disabled={busy}>
           <Icon name="shield" />{busy ? 'Creating Owner…' : 'Create Owner & Sign In'}
         </button>
-        {error && <p className="message error">{error}</p>}
+        {error && <p className="message error" role="alert">{error}</p>}
       </form>
     );
   }
 
   return (
     <div className="panel login login-card">
-      <form className="form" onSubmit={submitSso}>
-        <h2><Icon name="lock" />Sign in</h2>
-        <p className="muted">Single Sign-On across Homelab Dashboard and Night Lab Arcade 2077.</p>
-        <label>
-          Username
-          <input
-            type="text"
-            required
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="e.g. owner or recruiter-acme"
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            required
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password or Arcade PIN"
-          />
-        </label>
-        <div className="login-actions">
-          <button className="primary" type="submit" disabled={busy}>
-            <Icon name="key" />{busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          <a className="link" href="#/login">Full sign-in page →</a>
-        </div>
-        {error && <p className="message error">{error}</p>}
-      </form>
+      {mode === 'signin' ? (
+        <form className="form" onSubmit={submitSso}>
+          <h2><Icon name="lock" />Sign in</h2>
+          <p className="muted">Single Sign-On across Homelab Dashboard and Night Lab Arcade 2077.</p>
+          <label>
+            Username
+            <input
+              type="text"
+              required
+              maxLength={24}
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="e.g. owner or recruiter-acme"
+            />
+          </label>
+          <label>
+            Password or PIN
+            <input
+              type="password"
+              required
+              maxLength={128}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password or Arcade PIN"
+            />
+          </label>
+          <div className="login-actions">
+            <button className="primary" type="submit" disabled={busy}>
+              <Icon name="key" />{busy ? 'Signing in…' : 'Sign in'}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setError('');
+                setMode('register');
+              }}
+            >
+              <Icon name="gamepad" className="icon-xs" />New Player? Register Arcade Handle + PIN
+            </button>
+          </div>
+          {error && <p className="message error" role="alert">{error}</p>}
+        </form>
+      ) : (
+        <form className="form" onSubmit={submitRegister}>
+          <h2><Icon name="gamepad" />New Player? Register Arcade Handle + PIN</h2>
+          <p className="muted">Create a Player account to sync Night Lab Arcade 2077 scores, Street Cred XP, and Eddies.</p>
+          <label>
+            Arcade Handle
+            <input
+              type="text"
+              required
+              minLength={2}
+              maxLength={24}
+              pattern="[A-Za-z0-9_.\- ]+"
+              autoComplete="username"
+              value={regHandle}
+              onChange={(e) => setRegHandle(e.target.value)}
+              placeholder="2–24 chars (e.g. NightRunner)"
+            />
+          </label>
+          <label>
+            4–8 Digit Numeric PIN
+            <input
+              type="password"
+              required
+              inputMode="numeric"
+              pattern="\d{4,8}"
+              minLength={4}
+              maxLength={8}
+              autoComplete="new-password"
+              value={regPin}
+              onChange={(e) => setRegPin(e.target.value)}
+              placeholder="4–8 digits (e.g. 2077)"
+            />
+          </label>
+          <div className="duration-row">
+            <span className="field-label">Choose Netrunner Avatar</span>
+            <div className="tools" role="radiogroup" aria-label="Avatar">
+              {Object.entries(AVATAR_GLYPH).map(([id, glyph]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={regAvatar === id}
+                  className={`toggle ${regAvatar === id ? 'on' : ''}`}
+                  onClick={() => setRegAvatar(id)}
+                >
+                  <span>{glyph}</span>
+                  <span>{id}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="login-actions">
+            <button className="primary" type="submit" disabled={busy}>
+              <Icon name="gamepad" />{busy ? 'Registering…' : 'Create Player & Sign In'}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setError('');
+                setMode('signin');
+              }}
+            >
+              Already have an account? Sign in
+            </button>
+          </div>
+          {error && <p className="message error" role="alert">{error}</p>}
+        </form>
+      )}
       {meta.allowLegacyPassword && (
         <details className="legacy-box">
           <summary><Icon name="key" className="icon-xs" />Unlock with legacy main password</summary>
@@ -497,6 +649,7 @@ export const Login = ({
               <input
                 type="password"
                 required
+                maxLength={128}
                 autoComplete="current-password"
                 value={legacyValue}
                 onChange={(e) => setLegacyValue(e.target.value)}
@@ -504,6 +657,7 @@ export const Login = ({
               />
             </label>
             <button className="ghost" type="submit" disabled={busy}>Unlock</button>
+            {legacyError && <p className="message error" role="alert">{legacyError}</p>}
           </form>
         </details>
       )}

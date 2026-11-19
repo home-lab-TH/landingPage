@@ -124,7 +124,13 @@ export default function Topology({ stats, pass }: { stats: Stats | null; pass: s
                     </>}
                   </dl>
                   {stacks[sel.id] && <div className="chips">{stacks[sel.id].map((c) => <span key={c} className="chip">{c}</span>)}</div>}
-                  {pass ? <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a> : <a className="link muted" href="#/provision">Unlock for IP, metrics &amp; logs →</a>}
+                  {sel.id === '102' ? (
+                    <span className="pill"><Icon name="lock" className="icon-xs" />Protected</span>
+                  ) : pass ? (
+                    <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a>
+                  ) : (
+                    <a className="link muted" href="#/login">Unlock for IP, metrics &amp; logs →</a>
+                  )}
                 </>
               )}
             </>

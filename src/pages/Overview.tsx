@@ -3,11 +3,12 @@ import config from '../config/services.json';
 import { Help } from '../ui/Help';
 import { HealthPanel, HistoryPanel, UptimeBars, useUptime } from '../ui/Charts';
 import { Bar, Dot, Icon, authHeaders, bytes, duration, level, matches, pct, ratio } from '../lib';
-import type { Guest, SiteState, Stats } from '../lib';
+import type { AuthUser, Guest, SiteState, Stats } from '../lib';
 
 const stacks = config.stacks as Record<string, string[]>;
 const network = config.network as Record<string, string>;
 const KNOWN_KEY = 'homelab-known-guests';
+const SHOWCASE_DISMISSED_KEY = 'homelab-recruiter-showcase-dismissed';
 
 // Guests that appeared since this browser last looked. First visit just records what exists.
 function useNewGuests(guests: Guest[] | undefined) {
@@ -46,6 +47,7 @@ function GuestCard({ g, pass, busy, isNew, onPower, onRemove }: { g: Guest; pass
         <span className="pills">
           {isNew && <span className="pill new">New</span>}
           {g.type === 'vm' && <span className="pill">VM</span>}
+          {g.id === 102 && <span className="pill"><Icon name="lock" className="icon-xs" />Protected</span>}
           {g.id === 106 && <span className="pill"><Icon name="db" className="icon-xs" />DB</span>}
         </span>
       </div>
@@ -84,11 +86,19 @@ const SetupNotice = ({ message }: { message: string }) => (
   </section>
 );
 
-export default function Overview({ query, stats, statsError, sites, pass }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState>; pass: string }) {
+export default function Overview({ query, stats, statsError, sites, pass, user = null }: { query: string; stats: Stats | null; statsError: { code: number; message: string } | null; sites: Record<string, SiteState>; pass: string; user?: AuthUser | null }) {
   const [busy, setBusy] = useState<number | null>(null);
   const [note, setNote] = useState('');
+  const [showcaseDismissed, setShowcaseDismissed] = useState<boolean>(() => {
+    try { return sessionStorage.getItem(SHOWCASE_DISMISSED_KEY) === '1'; } catch { return false; }
+  });
   const { fresh, seen } = useNewGuests(stats?.guests);
   const uptime = useUptime(24);
+
+  const dismissShowcase = () => {
+    setShowcaseDismissed(true);
+    try { sessionStorage.setItem(SHOWCASE_DISMISSED_KEY, '1'); } catch { /* ignore */ }
+  };
 
   const power = async (g: Guest, action: 'start' | 'stop' | 'restart') => {
     if (action !== 'start' && !window.confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${g.name} (${g.id})?`)) return;
@@ -123,6 +133,32 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
 
   return (
     <>
+      {user?.role === 'recruiter_guest' && !showcaseDismissed && (
+        <section className="panel showcase-card">
+          <div className="panel-head">
+            <div>
+              <p className="eyebrow"><Icon name="spark" className="icon-xs" />Recruiter Guided Showcase</p>
+              <h2>Welcome, {user.displayName}</h2>
+            </div>
+            <button type="button" className="x" aria-label="Dismiss Recruiter Guided Showcase" onClick={dismissShowcase}>×</button>
+          </div>
+          <p className="lede">
+            You are exploring a live self-hosted Proxmox VE homelab running LXC containers, Docker apps, MongoDB, AI website builders, Mission Control agents, and the Night Lab // Arcade 2077 game hub with unified SSO.
+          </p>
+          <div className="quick-links">
+            <a className="btn solid" href="#/services"><Icon name="server" />Explore Live Services →</a>
+            <a className="btn" href="#/topology"><Icon name="map" />Interactive Topology →</a>
+            <a className="btn" href="#/provision"><Icon name="plus" />Spin Up a Sandbox VM/LXC →</a>
+            <a className="btn" href="./game/"><Icon name="gamepad" />Play Night Lab // Arcade 2077 →</a>
+          </div>
+          <p className="sandbox-note">
+            <Icon name="shield" className="icon-xs" />
+            <span>
+              <strong>Sandbox policy:</strong> Any VMs or containers you create are automatically tagged <code>sandbox-guest</code> in Proxmox and can be safely tested and deleted. CT 102 (Jacob&apos;s app) and host system updates are protected.
+            </span>
+          </p>
+        </section>
+      )}
       <section className="panel hero">
         <div className="hero-top">
           <span className="live"><i />Live</span>
@@ -183,7 +219,7 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
           <section className="panel">
             <div className="panel-head"><h2><Icon name="disk" />Public status</h2></div>
             <p className="muted">You're viewing the public status page. Storage, container details, health sensors and controls are hidden until unlocked.</p>
-            <a className="link" href="#/provision">Unlock →</a>
+            <a className="link" href="#/login">Unlock →</a>
           </section>
         )}
       </div>
@@ -195,7 +231,7 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
         <section className="panel">
           <div className="panel-head"><h2><Icon name="box" />Containers and VMs <span className="count">{running}/{stats?.guests.length ?? 0}</span></h2></div>
           <p className="muted">{running} of {stats?.guests.length ?? 0} running. Internal container details, IPs, storage, logs and controls are hidden until unlocked.</p>
-          <a className="link" href="#/provision">Unlock →</a>
+          <a className="link" href="#/login">Unlock →</a>
         </section>
       ) : (
       <section className="panel">

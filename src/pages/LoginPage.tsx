@@ -19,6 +19,8 @@ import type { AuthUser } from '../lib';
 type LoginPageProps = {
   user: AuthUser | null;
   pass: string;
+  authReady?: boolean;
+  authError?: string;
   needsBootstrap?: boolean;
   allowLegacyPassword?: boolean;
   onLogin: (passOrToken: string, user?: AuthUser) => void;
@@ -29,6 +31,8 @@ type LoginPageProps = {
 export default function LoginPage({
   user,
   pass,
+  authReady = true,
+  authError = '',
   needsBootstrap,
   allowLegacyPassword,
   onLogin,
@@ -61,9 +65,14 @@ export default function LoginPage({
   const submitChangePassword = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setPwMsg('');
+    if (user?.role === 'player' && !/^\d{4,8}$/.test(newPassword)) {
+      setPwState('err');
+      setPwMsg('New PIN must be 4–8 numeric digits.');
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setPwState('err');
-      setPwMsg('New passwords do not match.');
+      setPwMsg(user?.role === 'player' ? 'New PINs do not match.' : 'New passwords do not match.');
       return;
     }
     setPwState('busy');
@@ -73,7 +82,7 @@ export default function LoginPage({
         body: JSON.stringify({ currentPassword, newPassword }),
       }, pass);
       setPwState('ok');
-      setPwMsg('Password updated successfully.');
+      setPwMsg(user?.role === 'player' ? 'PIN updated successfully.' : 'Password updated successfully.');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -95,6 +104,63 @@ export default function LoginPage({
   const totalPlays = Object.values(user?.plays ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
   const combinedScore = Object.values(user?.scores ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
   const isLegacyOnly = !user && Boolean(pass) && pass !== '__sso__';
+  const isPlayer = user?.role === 'player';
+
+  const changePasswordForm = (
+    <form className="form" onSubmit={submitChangePassword}>
+      <label>
+        {isPlayer ? 'Current PIN' : 'Current password'}
+        <input
+          type="password"
+          required
+          inputMode={isPlayer ? 'numeric' : undefined}
+          pattern={isPlayer ? '\\d{4,8}' : undefined}
+          minLength={isPlayer ? 4 : undefined}
+          maxLength={isPlayer ? 8 : 128}
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+        />
+      </label>
+      <label>
+        {isPlayer ? 'New PIN' : 'New password'}
+        <input
+          type="password"
+          required
+          inputMode={isPlayer ? 'numeric' : undefined}
+          pattern={isPlayer ? '\\d{4,8}' : undefined}
+          minLength={isPlayer ? 4 : 6}
+          maxLength={isPlayer ? 8 : 128}
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder={isPlayer ? '4–8 digit PIN' : '6+ characters'}
+        />
+      </label>
+      <label>
+        {isPlayer ? 'Confirm new PIN' : 'Confirm new password'}
+        <input
+          type="password"
+          required
+          inputMode={isPlayer ? 'numeric' : undefined}
+          pattern={isPlayer ? '\\d{4,8}' : undefined}
+          minLength={isPlayer ? 4 : 6}
+          maxLength={isPlayer ? 8 : 128}
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+        />
+      </label>
+      <button className="primary" type="submit" disabled={pwState === 'busy'}>
+        <Icon name="key" />{pwState === 'busy' ? 'Updating…' : isPlayer ? 'Update PIN' : 'Update Password'}
+      </button>
+      {pwMsg && (
+        <p className={`message ${pwState === 'ok' ? 'success' : 'error'}`} role={pwState === 'ok' ? 'status' : 'alert'}>
+          {pwMsg}
+        </p>
+      )}
+    </form>
+  );
 
   return (
     <div className="login-page">
@@ -111,7 +177,17 @@ export default function LoginPage({
         )}
       </header>
 
-      {user ? (
+      {!user && authError && (
+        <p className="message error" role="alert">
+          <Icon name="alert" className="icon-xs" /> {authError}
+        </p>
+      )}
+
+      {!authReady && !user && !isLegacyOnly ? (
+        <section className="panel login-loading-card" role="status" aria-live="polite">
+          <p className="muted"><span className="spinner" /> Checking session…</p>
+        </section>
+      ) : user ? (
         <div className="login-session-grid">
           <section className="panel session-card">
             <div className="session-top">
@@ -142,10 +218,7 @@ export default function LoginPage({
               {hasPriv(user, 'manage_users') && (
                 <a className="btn" href="#/users"><Icon name="users" />Users &amp; Audit</a>
               )}
-              <a className="btn" href="/game/"><Icon name="gamepad" />Cyberpunk Game Hub</a>
-              <button type="button" className="ghost" disabled={signingOut} onClick={() => void handleSignOut()}>
-                <Icon name="logout" className="icon-xs" />Sign Out
-              </button>
+              <a className="btn" href="./game/"><Icon name="gamepad" />Cyberpunk Game Hub</a>
             </div>
 
             <div className="arcade-strip">
@@ -195,50 +268,19 @@ export default function LoginPage({
           </section>
 
           {!user.isLegacy ? (
-            <section className="panel">
-              <div className="panel-head">
-                <h2><Icon name="key" />Change Password</h2>
-              </div>
-              <form className="form" onSubmit={submitChangePassword}>
-                <label>
-                  Current password
-                  <input
-                    type="password"
-                    required
-                    autoComplete="current-password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                  />
-                </label>
-                <label>
-                  New password
-                  <input
-                    type="password"
-                    required
-                    minLength={user.role === 'player' ? 4 : 6}
-                    autoComplete="new-password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder={user.role === 'player' ? '4–8 digit PIN' : '6+ characters'}
-                  />
-                </label>
-                <label>
-                  Confirm new password
-                  <input
-                    type="password"
-                    required
-                    minLength={user.role === 'player' ? 4 : 6}
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                  />
-                </label>
-                <button className="primary" type="submit" disabled={pwState === 'busy'}>
-                  <Icon name="key" />{pwState === 'busy' ? 'Updating…' : 'Update Password'}
-                </button>
-                {pwMsg && <p className={`message ${pwState === 'ok' ? 'success' : 'error'}`}>{pwMsg}</p>}
-              </form>
-            </section>
+            user.role === 'recruiter_guest' ? (
+              <details className="panel more">
+                <summary><Icon name="key" className="icon-xs" />Change Temporary Guest Password</summary>
+                {changePasswordForm}
+              </details>
+            ) : (
+              <section className="panel">
+                <div className="panel-head">
+                  <h2><Icon name="key" />{isPlayer ? 'Change PIN' : 'Change Password'}</h2>
+                </div>
+                {changePasswordForm}
+              </section>
+            )
           ) : (
             <section className="panel notice">
               <h2><Icon name="key" />Legacy Session</h2>

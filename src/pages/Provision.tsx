@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Help } from '../ui/Help';
 import { Icon, Login, authHeaders } from '../lib';
-import type { ProvisionType } from '../lib';
+import type { AuthUser, ProvisionType } from '../lib';
 
-export default function Provision({ pass, onLogin }: { pass: string; onLogin: (p: string) => void }) {
+export default function Provision({ pass, user = null, onLogin }: { pass: string; user?: AuthUser | null; onLogin: (p: string, u?: AuthUser) => void }) {
   const [type, setType] = useState<ProvisionType>('lxc');
   const [name, setName] = useState('');
   const [cores, setCores] = useState(2);
@@ -28,6 +28,14 @@ export default function Provision({ pass, onLogin }: { pass: string; onLogin: (p
   return (
     <>
       <header className="page-head"><div><p className="eyebrow">Proxmox</p><h1>Create a container or VM <Help big title="This page: Create">Make a new guest on Proxmox. A container (LXC) is light and starts in seconds, good for one app or Docker. A VM is a full computer, cloned from your VM template. New guests get the dashboard tag, so you can delete them from the Overview later.</Help></h1><p className="lede">Containers start from a fresh Debian image; VMs are cloned from your VM template.</p></div></header>
+      {user?.role === 'recruiter_guest' && (
+        <p className="sandbox-note" role="status">
+          <Icon name="shield" className="icon-xs" />
+          <span>
+            <strong>Recruiter Sandbox:</strong> Any containers or VMs you provision are automatically tagged <code>sandbox-guest</code> in Proxmox and can be freely tested and removed from the Overview.
+          </span>
+        </p>
+      )}
       {!pass ? <Login onLogin={onLogin} /> : <form className="panel form" onSubmit={submit}>
         <div className="segmented" role="radiogroup">
           <Help title="Container or VM">Container: shares the server's Linux kernel, uses little memory, best for most apps. VM: its own operating system, for Windows or anything that needs full isolation.</Help>

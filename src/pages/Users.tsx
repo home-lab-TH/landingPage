@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   ARCADE_GAMES,
@@ -46,7 +46,8 @@ type CreatedCredential = {
 };
 
 type RoleFilter = 'all' | 'staff' | 'recruiter_guest' | 'player';
-type ActionCategory = '' | 'auth' | 'users' | 'compute' | 'sites' | 'ops';
+type ActionCategory = '' | 'auth' | 'users' | 'vm' | 'compute' | 'sites' | 'ops';
+const SANDBOX_RESOURCE_ACTION_RE = /^(guest\.provision|site\.|app\.|route\.|wordpress\.create|aisite\.create)/i;
 
 const DURATION_OPTIONS = [
   { hours: 2, label: '2h' },
@@ -107,9 +108,10 @@ function auditSandboxLabel(entry: AuditEntry): string {
 
 function matchesActionCategory(action: string, cat: ActionCategory): boolean {
   if (!cat) return true;
+  const isVmAction = /(provision|guest\.delete_vm|guest\.power|container|vm|lxc|proxmox|power)/i.test(action);
+  if (cat === 'vm' || cat === 'compute') return isVmAction;
   if (cat === 'auth') return /(auth|login|logout|bootstrap|password|session)/i.test(action);
-  if (cat === 'users') return /(user|guest|priv|role|revoke)/i.test(action);
-  if (cat === 'compute') return /(vm|lxc|proxmox|provision|container|power|guest\.(provision|delete_vm|power))/i.test(action);
+  if (cat === 'users') return !isVmAction && /(user|guest|priv|role|revoke)/i.test(action);
   if (cat === 'sites') return /(site|app|route|caddy|wordpress|aisite|ai\.)/i.test(action);
   if (cat === 'ops') return /(update|setting|config|note|agent|hub)/i.test(action);
   return true;
@@ -127,6 +129,18 @@ function formatInviteText(cred: CreatedCredential): string {
   const dashUrl = `${origin}/#/login`;
   const arcadeUrl = `${origin}/game/`;
   const exp = cred.expiresAt ? formatDateTime(cred.expiresAt) : 'No expiration';
+  if (cred.role === 'player') {
+    return [
+      `Night Lab // Cyber Arcade 2077 Access`,
+      `Arcade: ${arcadeUrl}`,
+      `Handle: ${cred.username}`,
+      `PIN: ${cred.password}`,
+      `Role: ${ROLE_META[cred.role]?.label ?? cred.role}`,
+      cred.note ? `Note: ${cred.note}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   return [
     `Homelab Dashboard & Cyber Arcade Access`,
     `Dashboard: ${dashUrl}`,
@@ -203,6 +217,9 @@ export default function Users({
   const [auditRole, setAuditRole] = useState('');
   const [auditCategory, setAuditCategory] = useState<ActionCategory>('');
   const [auditSandboxOnly, setAuditSandboxOnly] = useState(false);
+  const auditQueryRef = useRef(auditQuery);
+  auditQueryRef.current = auditQuery;
+  const feedbackRef = useRef<HTMLDivElement>(null);
 
   const isLegacyOwner = Boolean(pass && pass !== '__sso__' && !currentUser);
   const isOwner = currentUser?.role === 'owner' || isLegacyOwner;
@@ -241,22 +258,33 @@ export default function Users({
       params.set('actor', '');
       params.set('role', auditRole);
       params.set('sandboxOnly', auditSandboxOnly ? '1' : '');
-      params.set('q', auditQuery.trim());
+      params.set('q', auditQueryRef.current.trim());
       params.set('limit', '150');
       const data = await apiJson<AuditApiResponse>(`./api/admin/audit?${params.toString()}`, {}, pass);
       setAuditData(data);
+      setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to load audit log.');
     } finally {
       setLoadingAudit(false);
     }
-  }, [pass, auditRole, auditSandboxOnly, auditQuery]);
+  }, [pass, auditRole, auditSandboxOnly]);
 
   useEffect(() => {
     if (!canManage) return;
     void loadUsers();
+  }, [canManage, loadUsers]);
+
+  useEffect(() => {
+    if (!canManage) return;
     void loadAudit();
-  }, [canManage]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canManage, tab, loadAudit]);
+
+  useEffect(() => {
+    if (error || notice) {
+      feedbackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [error, notice]);
 
   useEffect(() => {
     const hasExpiring = usersData?.users.some((u) => Boolean(u.expiresAt));
@@ -264,12 +292,6 @@ export default function Users({
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [usersData?.users]);
-
-  useEffect(() => {
-    if (tab === 'audit' && canManage) {
-      void loadAudit();
-    }
-  }, [tab, auditRole, auditSandboxOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openGuestDrawer = () => {
     setDrawer((cur) => (cur === 'guest' ? 'none' : 'guest'));
@@ -442,11 +464,6 @@ export default function Users({
         { method: 'PATCH', body: JSON.stringify({ expiresAt: new Date().toISOString(), disabled: true }) },
         pass,
       );
-      await apiJson<{ ok: boolean }>(
-        `./api/admin/users/${encodeURIComponent(u.id)}/revoke-sessions`,
-        { method: 'POST', body: JSON.stringify({}) },
-        pass,
-      );
       setNotice(`Revoked @${u.username} and kicked all active sessions.`);
       await loadUsers();
       await loadAudit();
@@ -572,7 +589,7 @@ export default function Users({
     }
   };
 
-  const users = usersData?.users ?? [];
+  const users = useMemo(() => usersData?.users ?? [], [usersData?.users]);
   const q = userSearch.trim().toLowerCase();
 
   const filteredUsers = useMemo(() => {
@@ -586,9 +603,10 @@ export default function Users({
 
   const sandboxSummary = useMemo(() => {
     const logs = auditData?.logs ?? [];
-    const recent = auditData?.sandboxSummary?.recent ?? logs.filter((l) => Boolean(l.sandboxTag)).slice(0, 12);
-    const count = auditData?.sandboxSummary?.count ?? auditData?.sandboxSummary?.totalEvents ?? recent.length;
-    return { count, recent };
+    const rawRecent = auditData?.sandboxSummary?.recent ?? logs.filter((l) => Boolean(l.sandboxTag));
+    const recent = rawRecent.filter((l) => SANDBOX_RESOURCE_ACTION_RE.test(l.action)).slice(0, 12);
+    const totalEvents = auditData?.sandboxSummary?.count ?? auditData?.sandboxSummary?.totalEvents ?? rawRecent.length;
+    return { count: recent.length, totalEvents, recent };
   }, [auditData]);
 
   const kpis = useMemo(() => {
@@ -604,10 +622,10 @@ export default function Users({
       sessions,
       guestCount: guests.length,
       activeGuestCount: activeGuests.length,
-      sandboxCount: sandboxSummary.count,
+      sandboxCount: sandboxSummary.totalEvents,
       totalRuns,
     };
-  }, [users, now, sandboxSummary.count]);
+  }, [users, now, sandboxSummary.totalEvents]);
 
   const filteredLogs = useMemo(() => {
     const rows = auditData?.logs ?? [];
@@ -695,8 +713,10 @@ export default function Users({
         </div>
       </section>
 
-      {error && <p className="message error">{error}</p>}
-      {notice && <p className="message success">{notice}</p>}
+      <div ref={feedbackRef}>
+        {error && <p className="message error" role="alert">{error}</p>}
+        {notice && <p className="message success" role="status">{notice}</p>}
+      </div>
 
       {createdCred && (
         <section className="panel creds-box" aria-live="polite">
@@ -717,18 +737,18 @@ export default function Users({
                 onClick={() => void handleCopy('pw', createdCred.password)}
               >
                 <Icon name="copy" className="icon-xs" />
-                {copiedId === 'pw' ? 'Copied!' : 'Copy Password'}
+                {copiedId === 'pw' ? 'Copied!' : createdCred.role === 'player' ? 'Copy PIN' : 'Copy Password'}
               </button>
               <button type="button" className="x" aria-label="Dismiss credentials" onClick={() => setCreatedCred(null)}>×</button>
             </div>
           </div>
           <div className="creds-grid">
             <div className="tile">
-              <small>Username</small>
+              <small>{createdCred.role === 'player' ? 'Handle' : 'Username'}</small>
               <b className="mono">{createdCred.username}</b>
             </div>
             <div className="tile">
-              <small>Password</small>
+              <small>{createdCred.role === 'player' ? 'PIN' : 'Password'}</small>
               <b className="mono">{createdCred.password}</b>
             </div>
             <div className="tile">
@@ -780,6 +800,16 @@ export default function Users({
                 ))}
               </div>
               <div className="users-cta-group">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={loadingUsers}
+                  onClick={() => void loadUsers()}
+                  title="Refresh accounts list"
+                >
+                  <Icon name="refresh" className="icon-xs" />
+                  {loadingUsers ? 'Refreshing…' : 'Refresh'}
+                </button>
                 <button type="button" className="btn solid" onClick={openGuestDrawer}>
                   <Icon name="clock" className="icon-xs" />+ Recruiter Guest
                 </button>
@@ -1038,8 +1068,29 @@ export default function Users({
             {loadingUsers && !usersData && <p className="panel muted">Loading accounts…</p>}
             {!loadingUsers && filteredUsers.length === 0 && (
               <div className="panel notice">
-                <h2>No matching accounts</h2>
-                <p className="muted">Try clearing your search or role filter.</p>
+                {users.length > 0 && (userSearch.trim() !== '' || roleFilter !== 'all') ? (
+                  <>
+                    <h2>No accounts match the active filter</h2>
+                    <p className="muted">Try clearing your search query or role filter.</p>
+                    <div className="quick-links">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setUserSearch('');
+                          setRoleFilter('all');
+                        }}
+                      >
+                        Clear filters
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h2>No database accounts yet</h2>
+                    <p className="muted">Create a Recruiter Guest or User account above to get started.</p>
+                  </>
+                )}
               </div>
             )}
             {filteredUsers.map((u) => {
@@ -1320,7 +1371,7 @@ export default function Users({
       ) : (
         /* Tab 2: Audit Log & Sandbox */
         <>
-          {(sandboxSummary.count > 0 || sandboxSummary.recent.length > 0) && (
+          {sandboxSummary.recent.length > 0 && (
             <section className="panel sandbox-callout">
               <div className="panel-head">
                 <h2>
@@ -1379,6 +1430,7 @@ export default function Users({
                 <option value="admin">Admin</option>
                 <option value="recruiter_guest">Recruiter Guest</option>
                 <option value="player">Player</option>
+                <option value="anonymous">Anonymous</option>
               </select>
               <select
                 value={auditCategory}
@@ -1388,7 +1440,7 @@ export default function Users({
                 <option value="">All actions</option>
                 <option value="auth">Auth</option>
                 <option value="users">Users</option>
-                <option value="compute">VMs &amp; Containers</option>
+                <option value="vm">VMs &amp; Containers</option>
                 <option value="sites">Sites &amp; Routes</option>
                 <option value="ops">Updates &amp; Settings</option>
               </select>
@@ -1400,6 +1452,22 @@ export default function Users({
                 />
                 Sandbox Only
               </label>
+              {(auditQuery.trim() !== '' || auditRole !== '' || auditCategory !== '' || auditSandboxOnly) && (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    auditQueryRef.current = '';
+                    setAuditQuery('');
+                    setAuditRole('');
+                    setAuditCategory('');
+                    setAuditSandboxOnly(false);
+                    void loadAudit();
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
               <button type="submit" className="ghost" disabled={loadingAudit}>
                 <Icon name="refresh" className="icon-xs" />
                 {loadingAudit ? 'Refreshing…' : 'Refresh'}
@@ -1428,7 +1496,7 @@ export default function Users({
                   {filteredLogs.map((entry) => {
                     const actor = auditActor(entry);
                     const sbLabel = auditSandboxLabel(entry);
-                    const roleBadgeCls = ROLE_META[actor.role as AuthRole]?.cls ?? 'player';
+                    const roleBadgeCls = actor.role === 'anonymous' ? 'anonymous' : (ROLE_META[actor.role as AuthRole]?.cls ?? 'anonymous');
                     const detailsText =
                       entry.details && typeof entry.details === 'object' && Object.keys(entry.details as Record<string, unknown>).length > 0
                         ? JSON.stringify(entry.details, null, 2)
@@ -1469,7 +1537,29 @@ export default function Users({
                   {filteredLogs.length === 0 && (
                     <tr>
                       <td colSpan={7} className="muted audit-empty">
-                        {loadingAudit ? 'Loading audit log…' : 'No audit entries match the current filters.'}
+                        {loadingAudit ? (
+                          'Loading audit log…'
+                        ) : (auditQuery.trim() !== '' || auditRole !== '' || auditCategory !== '' || auditSandboxOnly) ? (
+                          <div>
+                            <p>No audit entries match the current filters.</p>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => {
+                                auditQueryRef.current = '';
+                                setAuditQuery('');
+                                setAuditRole('');
+                                setAuditCategory('');
+                                setAuditSandboxOnly(false);
+                                void loadAudit();
+                              }}
+                            >
+                              Clear filters
+                            </button>
+                          </div>
+                        ) : (
+                          'No audit entries recorded yet.'
+                        )}
                       </td>
                     </tr>
                   )}

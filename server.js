@@ -42,7 +42,8 @@ const parseCookies = (header = '') => {
 
 const isHttpsRequest = (request) => Boolean(
   request.secure
-  || String(request.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase() === 'https',
+  || String(request.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase() === 'https'
+  || String(request.get('cf-visitor') || '').includes('"https"'),
 );
 
 const setSessionCookie = (request, response, token, expiresAt) => {
@@ -71,8 +72,8 @@ const clearSessionCookie = (request, response) => {
   response.setHeader('Set-Cookie', parts.join('; '));
 };
 
-// the last X-Forwarded-For entry is the one Tailscale's proxy added, so a visitor cannot fake it
-const visitor = (request) => String(request.get('x-forwarded-for') || '').split(',').pop().trim() || request.socket?.remoteAddress || '?';
+// Prefer Cloudflare's client IP or the first X-Forwarded-For entry so visitors behind Cloudflare Tunnel -> CT 101 nginx don't share one rate-limit bucket
+const visitor = (request) => request.get('cf-connecting-ip')?.trim() || String(request.get('x-forwarded-for') || '').split(',')[0].trim() || request.socket?.remoteAddress || '?';
 
 const timingSafeMatch = (aStr, bStr) => {
   if (!aStr || !bStr) return false;
@@ -1581,7 +1582,7 @@ export function createApp(options = {}) {
   app.post('/api/apps', requirePriv('create_vms'), async (request, response) => {
     const b = request.body ?? {};
     const name = String(b.name || '').trim().toLowerCase();
-    if (['sites', 'codezi', 'api', 'assets', 'landing', 'docker-avi'].includes(name)) return response.status(400).json({ message: `${name} is already used by the server, pick another name.` });
+    if (['sites', 'codezi', 'api', 'assets', 'landing', 'docker-avi', 'jacobflightmonitor'].includes(name)) return response.status(400).json({ message: `${name} is already used by the server, pick another name.` });
     if ((await routes()).some((r) => r.name === name)) return response.status(400).json({ message: `A site called ${name} already exists.` });
     try {
       const result = await hostAgent('POST', '/apps', { name, title: String(b.title || name), source_type: b.source_type, source: String(b.source || ''), port: Number(b.port) || 80, cores: Number(b.cores) || 1, memory: Number(b.memory) || 1024, disk: Number(b.disk) || 8 });
@@ -1591,6 +1592,10 @@ export function createApp(options = {}) {
   });
   app.post('/api/apps/:ctid/update', requirePriv('manage_sites'), async (request, response) => {
     if (!/^\d+$/.test(request.params.ctid)) return response.status(400).json({ message: 'Bad id.' });
+    if (NO_TOUCH.has(Number(request.params.ctid))) {
+      await audit(request, 'app.update', String(request.params.ctid), 'denied', { reason: 'protected_ct102' });
+      return response.status(403).json({ message: `Guest ${request.params.ctid} is off-limits here.` });
+    }
     try {
       const result = await hostAgent('POST', `/apps/${request.params.ctid}/update`);
       await audit(request, 'app.update', String(request.params.ctid), 'ok');
@@ -1630,6 +1635,10 @@ export function createApp(options = {}) {
   app.post('/api/aisites', requirePriv('manage_sites'), async (request, response) => {
     const b = request.body ?? {};
     const name = String(b.name || '').trim().toLowerCase();
+    if (b.ctid !== undefined && b.ctid !== null && b.ctid !== '' && NO_TOUCH.has(Number(b.ctid))) {
+      await audit(request, 'aisite.create', String(b.ctid), 'denied', { name, reason: 'protected_ct102' });
+      return response.status(403).json({ message: `Guest ${b.ctid} is off-limits here.` });
+    }
     if (['sites', 'codezi', 'api', 'assets', 'docker-avi', 'jacobflightmonitor'].includes(name)) return response.status(400).json({ message: `${name} is already used by the server, pick another name.` });
     if ((await routes()).some((r) => r.name === name)) return response.status(400).json({ message: `A site called ${name} already exists.` });
     try {
@@ -1642,6 +1651,10 @@ export function createApp(options = {}) {
   app.post('/api/aisites/:ctid/:action', requirePriv('manage_sites'), async (request, response) => {
     const { ctid, action } = request.params;
     if (!/^\d+$/.test(ctid) || !['edit', 'undo'].includes(action)) return response.status(400).json({ message: 'Bad request.' });
+    if (NO_TOUCH.has(Number(ctid))) {
+      await audit(request, `aisite.${action}`, String(ctid), 'denied', { reason: 'protected_ct102' });
+      return response.status(403).json({ message: `Guest ${ctid} is off-limits here.` });
+    }
     try {
       const quality = request.body?.quality === 'best' ? 'best' : 'fast';
       const result = await hostAgent('POST', `/aisites/${ctid}/${action}`, { prompt: String(request.body?.prompt || ''), quality });
@@ -1701,6 +1714,10 @@ export function createApp(options = {}) {
     const key = request.params.key;
     const lines = Math.max(10, Math.min(2000, Number(request.query.lines) || 200));
     if (!/^[a-z0-9-]{2,60}$/.test(key)) return response.status(400).json({ message: 'Bad log name.' });
+    if (key === 'ct-102' || key === 'app-102') {
+      await audit(request, 'logs.read', key, 'denied', { reason: 'protected_ct102' });
+      return response.status(403).json({ message: 'Guest 102 is off-limits here.' });
+    }
     try {
       if (key === 'proxmox-tasks') return response.json({ key, lines: await taskLines(Math.min(lines, 500)) });
       return response.json(await hostAgent('GET', `/logs/${key}?lines=${lines}`, undefined, 30000));

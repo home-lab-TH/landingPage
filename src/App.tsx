@@ -114,10 +114,11 @@ export function App() {
   const [query, setQuery] = useState('');
   const [pass, setPass] = useState(readPass);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [authMeta, setAuthMeta] = useState<{ needsBootstrap: boolean; allowLegacyPassword: boolean; ready: boolean }>({
+  const [authMeta, setAuthMeta] = useState<{ needsBootstrap: boolean; allowLegacyPassword: boolean; ready: boolean; authError: string }>({
     needsBootstrap: false,
     allowLegacyPassword: true,
     ready: false,
+    authError: '',
   });
   const [now, setNow] = useState(() => Date.now());
   const [bar, setBar] = useState(false);
@@ -140,10 +141,12 @@ export function App() {
       }
       const body = (await response.json()) as AuthMeResponse;
       const allowLegacy = body.allowLegacyPassword !== false;
+      const sessionReason = !body.authenticated ? (body.error || body.message || '') : '';
       setAuthMeta({
         needsBootstrap: Boolean(body.needsBootstrap),
         allowLegacyPassword: allowLegacy,
         ready: true,
+        authError: sessionReason,
       });
       if (body.authenticated && body.user) {
         setUser(body.user);
@@ -213,13 +216,15 @@ export function App() {
   }, [refreshAuth]);
 
   const isLegacyOwner = Boolean(pass && pass !== '__sso__' && !user);
-  const allowed = (priv: string) => isLegacyOwner || hasPriv(user, priv);
+  const allowed = useCallback((priv: string) => isLegacyOwner || hasPriv(user, priv), [isLegacyOwner, user]);
   const canManageUsers = Boolean(pass) && allowed('manage_users');
+  const canRunUpdates = Boolean(pass) && allowed('run_updates');
   const overviewPass = pass && (allowed('view_private') || allowed('manage_containers')) ? pass : '';
 
   const nav = useMemo<[Page, string, string][]>(() => {
-    return canManageUsers ? [...BASE_NAV, ['users', 'Users', 'users']] : BASE_NAV;
-  }, [canManageUsers]);
+    const base = canRunUpdates ? BASE_NAV : BASE_NAV.filter(([id]) => id !== 'updates');
+    return canManageUsers ? [...base, ['users', 'Users', 'users']] : base;
+  }, [canRunUpdates, canManageUsers]);
 
   const q = query.trim().toLowerCase();
   const guestExpiry = user?.role === 'recruiter_guest' ? formatCountdown(user.expiresAt, now) : null;
@@ -286,27 +291,34 @@ export function App() {
                 {guestExpiry.text}
               </span>
             )}
-            <a className="link" href="#/login">Session details →</a>
+            <a className="link" href="./game/">Arcade 2077 ↗</a>
+            {guestExpiry?.expired ? (
+              <a className="btn solid" href="#/login">Sign in again →</a>
+            ) : (
+              <a className="link" href="#/login">Session details →</a>
+            )}
           </div>
         </aside>
       )}
 
       <main className="page" key={page}>
         <Suspense fallback={<p className="muted loading">Loading…</p>}>
-          {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={overviewPass} />}
+          {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={overviewPass} user={user} />}
           {page === 'services' && <Services query={q} sites={sites} />}
           {page === 'topology' && <Topology stats={stats} pass={overviewPass} />}
-          {page === 'sites' && (pass && !allowed('manage_sites') ? <InsufficientPrivilege title="Sites" privilege="manage_sites" user={user} /> : <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} onLogin={handleLogin} />)}
+          {page === 'sites' && (pass && !allowed('manage_sites') ? <InsufficientPrivilege title="Sites" privilege="manage_sites" user={user} /> : <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} user={user} onLogin={handleLogin} />)}
           {page === 'notes' && (pass && !allowed('manage_notes') ? <InsufficientPrivilege title="Notes" privilege="manage_notes" user={user} /> : <NotesPage query={q} pass={pass} onLogin={handleLogin} />)}
           {page === 'updates' && (!pass ? <Locked title="Updates" text="Sign in to check and install updates." needsBootstrap={authMeta.ready ? authMeta.needsBootstrap : undefined} allowLegacyPassword={authMeta.ready ? authMeta.allowLegacyPassword : undefined} onLogin={handleLogin} /> : !allowed('run_updates') ? <InsufficientPrivilege title="Updates" privilege="run_updates" user={user} /> : <UpdatesPage pass={pass} />)}
           {page === 'logs' && (!pass ? <Locked title="Logs" text="Sign in to read the server's logs." needsBootstrap={authMeta.ready ? authMeta.needsBootstrap : undefined} allowLegacyPassword={authMeta.ready ? authMeta.allowLegacyPassword : undefined} onLogin={handleLogin} /> : !allowed('view_logs') ? <InsufficientPrivilege title="Logs" privilege="view_logs" user={user} /> : <LogsPage pass={pass} initial={logKey} />)}
           {page === 'agents' && (!pass ? <Locked title="Agents" text="Sign in to see the agents hub and hand out tasks." needsBootstrap={authMeta.ready ? authMeta.needsBootstrap : undefined} allowLegacyPassword={authMeta.ready ? authMeta.allowLegacyPassword : undefined} onLogin={handleLogin} /> : !allowed('view_agents') ? <InsufficientPrivilege title="Agents" privilege="view_agents" user={user} /> : <Agents query={q} pass={pass} />)}
-          {page === 'provision' && (pass && !allowed('create_vms') ? <InsufficientPrivilege title="Create" privilege="create_vms" user={user} /> : <Provision pass={pass} onLogin={handleLogin} />)}
+          {page === 'provision' && (pass && !allowed('create_vms') ? <InsufficientPrivilege title="Create" privilege="create_vms" user={user} /> : <Provision pass={pass} user={user} onLogin={handleLogin} />)}
           {page === 'users' && (!pass ? <Locked title="Users & Audit" text="Sign in with user management access to manage accounts and audit logs." needsBootstrap={authMeta.ready ? authMeta.needsBootstrap : undefined} allowLegacyPassword={authMeta.ready ? authMeta.allowLegacyPassword : undefined} onLogin={handleLogin} /> : !allowed('manage_users') ? <InsufficientPrivilege title="Users & Audit" privilege="manage_users" user={user} /> : <Users currentUser={user} pass={pass} onRefreshAuth={refreshAuth} />)}
           {page === 'login' && (
             <LoginPage
               user={user}
               pass={pass}
+              authReady={authMeta.ready}
+              authError={authMeta.authError}
               needsBootstrap={authMeta.ready ? authMeta.needsBootstrap : undefined}
               allowLegacyPassword={authMeta.ready ? authMeta.allowLegacyPassword : undefined}
               onLogin={handleLogin}

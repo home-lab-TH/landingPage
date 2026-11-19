@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Help } from '../ui/Help';
 import { DeployApp, History, LogBox, useJob } from '../ui/Ops';
 import type { AppInfo } from '../ui/Ops';
-import { Dot, Icon, Login, authHeaders, matches, newId, PROMPT_KEY } from '../lib';
-import type { JobResult, Route, SiteState } from '../lib';
+import { Dot, Icon, Login, authHeaders, hasPriv, matches, newId, PROMPT_KEY } from '../lib';
+import type { AuthUser, JobResult, Route, SiteState } from '../lib';
 
 const JOB_KEY = 'homelab-job2';
 type Tracked = { source: 'site' | 'host'; id: string; kind: string; name: string };
@@ -16,7 +16,7 @@ const IDEAS = ['A bold, modern site for a small bakery: hero photo, menu with pr
 type Candidate = { ctid: number; name: string; status: string };
 type Editing = { route: Route; kind: 'wp' | 'aisite'; ctid?: number };
 
-export default function Sites({ query, routes, sites, pass, onLogin }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; onLogin: (p: string) => void }) {
+export default function Sites({ query, routes, sites, pass, user = null, onLogin }: { query: string; routes: Route[]; sites: Record<string, SiteState>; pass: string; user?: AuthUser | null; onLogin: (p: string, u?: AuthUser) => void }) {
   const [prompt, setPrompt] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
@@ -35,11 +35,11 @@ export default function Sites({ query, routes, sites, pass, onLogin }: { query: 
   const [error, setError] = useState('');
   const [savedPrompt, setSavedPrompt] = useState(false);
   const [apps, setApps] = useState<AppInfo[]>([]);
-  const loadApps = () => { if (pass) fetch('./api/apps', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); };
-  const loadCandidates = () => { if (pass) fetch('./api/aisites/candidates', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); };
-  useEffect(() => { loadApps(); loadCandidates(); }, [pass]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadApps = useCallback(() => { if (pass) fetch('./api/apps', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); }, [pass]);
+  const loadCandidates = useCallback(() => { if (pass) fetch('./api/aisites/candidates', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); }, [pass]);
+  useEffect(() => { loadApps(); loadCandidates(); }, [loadApps, loadCandidates]);
   useEffect(() => { try { localStorage.setItem('homelab-quality', quality); } catch { /* ignore */ } }, [quality]);
-  useEffect(() => { if (job && job.state !== 'running') { loadApps(); loadCandidates(); } }, [job?.state]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (job && job.state !== 'running') { loadApps(); loadCandidates(); } }, [job, loadApps, loadCandidates]);
   const box = useRef<HTMLTextAreaElement>(null);
 
   const call = async (label: string, url: string, init: RequestInit = {}) => {
@@ -57,7 +57,7 @@ export default function Sites({ query, routes, sites, pass, onLogin }: { query: 
   useEffect(() => { if (!nameTouched && !editing) setName(slug(prompt.split(/[.,:\n]/)[0].split(/\s+/).filter((w) => !STOP.has(w.toLowerCase())).slice(0, 2).join(' '))); }, [prompt, nameTouched, editing]);
 
   const follow = (t: Tracked) => { setTracking(t); saveJob(t); };
-  useEffect(() => { if (job && job.state !== 'running') saveJob(null); }, [job?.state]);
+  useEffect(() => { if (job && job.state !== 'running') saveJob(null); }, [job]);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (editing?.kind === 'wp') {
@@ -190,7 +190,7 @@ export default function Sites({ query, routes, sites, pass, onLogin }: { query: 
         </section>
       )}
       {!pass && <Login onLogin={onLogin} />}
-      {pass && ai === false && (
+      {pass && ai === false && (!user || hasPriv(user, 'manage_settings')) && (
         <form className="panel form key-form" onSubmit={saveKey}>
           <h2><Icon name="spark" />Connect Gemini <Help title="Gemini key">The builder uses Google Gemini to write the pages. Make a key at aistudio.google.com and paste it once. It is stored only on the websites server (CT 108) and never shown again.</Help></h2>
           <div className="row"><input type="password" required value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your Gemini API key" autoComplete="off" /><button className="primary" type="submit" disabled={busy === 'key'}>{busy === 'key' ? 'Saving…' : 'Save key'}</button></div>

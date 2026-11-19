@@ -453,6 +453,7 @@ details.more[open] summary { margin-bottom: 14px; }
 .role-badge.admin { color: var(--blue); border-color: rgba(122, 162, 255, .4); background: rgba(122, 162, 255, .12); }
 .role-badge.guest { color: var(--violet); border-color: rgba(177, 140, 255, .45); background: rgba(177, 140, 255, .14); }
 .role-badge.player { color: var(--ok); border-color: rgba(52, 211, 153, .38); background: rgba(52, 211, 153, .1); }
+.role-badge.anonymous { color: var(--dim); border-color: var(--line-2); background: var(--tile); }
 .role-badge.expired { color: var(--crit); border-color: rgba(248, 113, 113, .45); background: rgba(248, 113, 113, .12); }
 
 .countdown-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(177, 140, 255, .4); background: rgba(177, 140, 255, .1); color: var(--violet); font-family: var(--mono); font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -466,6 +467,12 @@ details.more[open] summary { margin-bottom: 14px; }
 
 /* ---------- Login component & LoginPage ---------- */
 .login-card { max-width: 560px; }
+.login-loading-card { max-width: 480px; margin: 24px auto; text-align: center; padding: 32px 24px; }
+.login-loading-card p { display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 14px; }
+.showcase-card { border-color: rgba(177, 140, 255, .45); background: linear-gradient(135deg, rgba(177, 140, 255, .11), rgba(255, 184, 77, .06) 55%, rgba(18, 18, 20, .95)); display: grid; gap: 12px; }
+.showcase-card .panel-head { margin-bottom: 0; align-items: flex-start; }
+.showcase-card .quick-links { margin-top: 4px; }
+.showcase-card .sandbox-note { margin-bottom: 0; }
 .login-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .legacy-box { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .legacy-box summary { cursor: pointer; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--dim); }
@@ -589,10 +596,26 @@ details.more[open] summary { margin-bottom: 14px; }
   .arcade-strip, .user-arcade-strip, .creds-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  .top-auth { justify-self: end; }
+  .top-auth { justify-self: end; flex-wrap: wrap; }
   .user-pill-name { max-width: 90px; }
   .users-cta-group { margin-left: 0; width: 100%; }
-  .users-cta-group > .btn { flex: 1; justify-content: center; }
+  .users-cta-group > .btn, .users-cta-group > .ghost { flex: 1; justify-content: center; }
   .arcade-strip, .user-arcade-strip, .creds-grid { grid-template-columns: 1fr; }
   .sandbox-ribbon { margin-top: -6px; }
+}
+@media (max-width: 520px) {
+  .top { grid-template-columns: 1fr; gap: 10px; }
+  .top-auth { grid-column: 1 / -1; justify-self: stretch; display: flex; flex-wrap: wrap; justify-content: space-between; width: 100%; gap: 8px; }
+  .user-pill { flex: 1 1 auto; min-width: 0; max-width: 100%; min-height: 42px; }
+  .user-pill-name { max-width: 120px; }
+  .tabs { grid-row: 3; }
+  .search { grid-row: 4; min-height: 42px; }
+  .btn, .primary, .ghost, .danger, .toggle, .tabs a, .form input, .form select, .drawer-grid input, .drawer-grid select, .inline-pass input, .audit-filters select, .users-search {
+    min-height: 42px;
+  }
+}
+@media (pointer: coarse) {
+  .btn, .primary, .ghost, .danger, .toggle, .user-pill, .search, .users-search, .form input, .form select, .drawer-grid input, .drawer-grid select, .inline-pass input, .audit-filters select {
+    min-height: 42px;
+  }
 }

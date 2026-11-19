@@ -66,14 +66,17 @@ export function CommandBar({
       icon: 'external',
       run: () => { window.open(new URL(s.url, window.location.href).href, '_blank', 'noopener'); },
     }));
-    const guests = (canInspectGuests ? stats?.guests ?? [] : []).map((g): Entry => ({
-      id: `guest-${g.id}`,
-      group: 'Containers',
-      label: g.name,
-      icon: g.type === 'vm' ? 'box' : 'server',
-      hint: `${g.type === 'vm' ? 'VM' : 'CT'} ${g.id} · ${g.status}${g.type === 'lxc' ? ' · logs' : ' · topology'}`,
-      run: go(g.type === 'lxc' ? `#/logs/ct-${g.id}` : '#/topology'),
-    }));
+    const guests = (canInspectGuests ? stats?.guests ?? [] : []).map((g): Entry => {
+      const canLogs = g.type === 'lxc' && g.id !== 102;
+      return {
+        id: `guest-${g.id}`,
+        group: 'Containers',
+        label: g.name,
+        icon: g.type === 'vm' ? 'box' : 'server',
+        hint: `${g.type === 'vm' ? 'VM' : 'CT'} ${g.id} · ${g.status}${g.id === 102 ? ' · protected · topology' : canLogs ? ' · logs' : ' · topology'}`,
+        run: go(canLogs ? `#/logs/ct-${g.id}` : '#/topology'),
+      };
+    });
     return [...pages, ...sites, ...guests];
   }, [nav, stats, pass, user, canInspectGuests]);
 

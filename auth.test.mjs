@@ -1208,3 +1208,105 @@ test('30. /api/auth/me, /api/admin/users, and /api/admin/audit expose complete U
   assert.ok(audit.data.sandboxSummary.count >= 2);
   assert.ok(Array.isArray(audit.data.sandboxSummary.recent) && audit.data.sandboxSummary.recent.length >= 2);
 });
+
+test('31. Cloudflare headers (cf-connecting-ip, first XFF, cf-visitor https), expired guest leaderboard exclusion, and CT 102 endpoint blocks', async (t) => {
+  const prev = process.env.DASHBOARD_PASSWORD;
+  delete process.env.DASHBOARD_PASSWORD;
+  const tApp = await startTestApp({
+    proxyAgentImpl: async () => ({ routes: [] }),
+    hostAgentImpl: async () => ({ ok: true, lines: ['should not be called'] }),
+  });
+  t.after(async () => {
+    if (prev !== undefined) process.env.DASHBOARD_PASSWORD = prev;
+    await tApp.close();
+  });
+
+  const owner = await bootstrapOwner(tApp, { username: 'cf_owner', password: 'OwnerSecret!99' });
+
+  // cf-visitor with https sets Secure on session cookie
+  const cfLogin = await tApp.req('POST', '/api/auth/login', {
+    headers: {
+      'CF-Visitor': '{"scheme":"https"}',
+      'CF-Connecting-IP': '198.51.100.42',
+      'X-Forwarded-For': '198.51.100.42, 10.0.0.250',
+    },
+    body: { username: 'cf_owner', password: 'OwnerSecret!99' },
+  });
+  assert.equal(cfLogin.status, 200);
+  assert.ok(cfLogin.setCookies[0].includes('Secure'));
+
+  // Rate limit uses first XFF / cf-connecting-ip rather than last proxy IP (10.0.0.250)
+  for (let i = 0; i < 10; i += 1) {
+    await tApp.req('POST', '/api/auth/login', {
+      headers: { 'X-Forwarded-For': '203.0.113.10, 10.0.0.250' },
+      body: { username: 'cf_owner', password: 'bad' },
+    });
+  }
+  const blockedClient = await tApp.req('POST', '/api/auth/login', {
+    headers: { 'X-Forwarded-For': '203.0.113.10, 10.0.0.250' },
+    body: { username: 'cf_owner', password: 'OwnerSecret!99' },
+  });
+  assert.equal(blockedClient.status, 429);
+
+  // Another client behind the same CT 101 proxy (10.0.0.250) is NOT rate-limited
+  const otherClient = await tApp.req('POST', '/api/auth/login', {
+    headers: { 'X-Forwarded-For': '203.0.113.11, 10.0.0.250' },
+    body: { username: 'cf_owner', password: 'OwnerSecret!99' },
+  });
+  assert.equal(otherClient.status, 200);
+
+  // Expired guest is excluded from public leaderboard, public game users, and score rank calculation
+  const mkGuest = await tApp.req('POST', '/api/admin/users', {
+    cookie: owner.cookie,
+    body: { username: 'exp_highscorer', role: 'recruiter_guest', password: 'GuestPass!1', durationHours: 2 },
+  });
+  const guestLogin = await tApp.req('POST', '/api/auth/login', {
+    body: { username: 'exp_highscorer', password: 'GuestPass!1' },
+  });
+  await tApp.req('POST', '/api/game/score', {
+    cookie: guestLogin.cookie,
+    body: { game_id: 'defender', score: 99999, wave: 30, won: true, eddies: 500, xp: 1000 },
+  });
+
+  // Expire the guest
+  await tApp.req('PATCH', `/api/admin/users/${mkGuest.data.user.id}`, {
+    cookie: owner.cookie,
+    body: { expiresAt: new Date(Date.now() - 2000).toISOString() },
+  });
+
+  // Owner posts a lower score (5000) and should rank #1 because expired guest is excluded
+  const ownerScore = await tApp.req('POST', '/api/game/score', {
+    cookie: owner.cookie,
+    body: { game_id: 'defender', score: 5000, wave: 5, won: false, eddies: 100, xp: 100 },
+  });
+  assert.equal(ownerScore.status, 200);
+  assert.equal(ownerScore.data.rank, 1);
+
+  const lb = await tApp.req('GET', '/api/game/leaderboard?game=defender');
+  assert.equal(lb.data.entries.some((e) => e.handle === 'exp_highscorer'), false);
+
+  const pubUsers = await tApp.req('GET', '/api/game/users');
+  assert.equal(pubUsers.data.users.some((u) => u.handle === 'exp_highscorer'), false);
+
+  // CT 102 protection across logs, aisites, apps update, and reserved jacobflightmonitor name
+  assert.equal((await tApp.req('GET', '/api/logs/ct-102', { cookie: owner.cookie })).status, 403);
+  assert.equal((await tApp.req('GET', '/api/logs/app-102', { cookie: owner.cookie })).status, 403);
+  assert.equal((await tApp.req('POST', '/api/aisites', {
+    cookie: owner.cookie,
+    body: { name: 'test-102', prompt: 'test', ctid: 102 },
+  })).status, 403);
+  assert.equal((await tApp.req('POST', '/api/aisites/102/edit', {
+    cookie: owner.cookie,
+    body: { prompt: 'edit 102' },
+  })).status, 403);
+  assert.equal((await tApp.req('POST', '/api/aisites/102/undo', {
+    cookie: owner.cookie,
+  })).status, 403);
+  assert.equal((await tApp.req('POST', '/api/apps/102/update', {
+    cookie: owner.cookie,
+  })).status, 403);
+  assert.equal((await tApp.req('POST', '/api/apps', {
+    cookie: owner.cookie,
+    body: { name: 'jacobFlightMonitor', source_type: 'git', source: 'https://example.com/x.git' },
+  })).status, 400);
+});

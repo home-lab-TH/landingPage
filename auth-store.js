@@ -552,9 +552,10 @@ function createMemoryDb() {
     },
 
     async countActiveUsersWithHigherScore(gameId, score) {
+      const now = Date.now();
       let count = 0;
       for (const u of users.values()) {
-        if (u.disabled) continue;
+        if (u.disabled || isUserExpired(u, now)) continue;
         if ((u.profile?.scores?.[gameId] || 0) > score) count += 1;
       }
       return count;
@@ -821,8 +822,10 @@ function createMongoDb(mongoUri) {
 
     async countActiveUsersWithHigherScore(gameId, score) {
       const users = await col('users');
+      const now = new Date();
       return users.countDocuments({
         disabled: { $ne: true },
+        $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }],
         [`profile.scores.${gameId}`]: { $gt: score },
       });
     },
@@ -1098,9 +1101,10 @@ export function createAuthStore({ mongoUri = process.env.MONGO_URI || DEFAULT_MO
     },
 
     async listPublicGameUsers() {
+      const now = Date.now();
       const users = await db.listUsers();
       return users
-        .filter((u) => !u.disabled)
+        .filter((u) => !u.disabled && !isUserExpired(u, now))
         .sort((a, b) => (nonNegInt(b.xp) - nonNegInt(a.xp)) || a.username.localeCompare(b.username))
         .slice(0, 500)
         .map((u) => ({
@@ -1273,7 +1277,8 @@ export function createAuthStore({ mongoUri = process.env.MONGO_URI || DEFAULT_MO
     async getLeaderboard({ game = 'all', limit = 20 } = {}) {
       if (game !== 'all') cleanGameId(game);
       const lim = Math.max(1, Math.min(100, Number(limit) || 20));
-      const users = (await db.listUsers()).filter((u) => !u.disabled);
+      const now = Date.now();
+      const users = (await db.listUsers()).filter((u) => !u.disabled && !isUserExpired(u, now));
 
       const games = GAME_IDS.map((g) => {
         let players = 0;
