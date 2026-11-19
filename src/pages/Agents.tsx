@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Icon } from '../lib';
+import { Icon, authHeaders } from '../lib';
 import type { HubAgent, HubData, HubEvent, HubTask } from '../lib';
 import { Help } from '../ui/Help';
 
@@ -34,7 +34,7 @@ const statusPill = (status: string) => (status === 'done' ? 'up' : status === 'f
 const nice = (s: string) => s.replace(/_/g, ' ');
 
 async function api<T>(pass: string, url: string, init: RequestInit = {}): Promise<T> {
-  const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass } });
+  const r = await fetch(url, { credentials: 'same-origin', ...init, headers: authHeaders(pass, { 'Content-Type': 'application/json' }) });
   const b = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((b as { message?: string }).message || `Request failed (${r.status}).`);
   return b as T;

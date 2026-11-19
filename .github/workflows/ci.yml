@@ -15,3 +15,5 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run build
       - run: node --check server.js
+      - run: node --check auth-store.js
+      - run: node --test auth.test.mjs

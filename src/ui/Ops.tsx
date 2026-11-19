@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Help } from './Help';
+import { authHeaders } from '../lib';
 
 // Shared pieces for history, app deploys and the Logs page. All calls need the main password.
 export type JobSummary = { id: string; source?: 'site' | 'host'; kind: string; name: string; state: 'running' | 'done' | 'failed'; step: string; error: string; started: string; ended: string | null; prompt?: string; ctid?: number; result?: Record<string, unknown> | null; log?: string[]; can_undo?: boolean };
@@ -25,7 +26,7 @@ export const jobLabel = (j: JobSummary) => ({
 const lineClass = (l: string) => (/\b(error|fail(ed)?|fatal|panic|denied|refused|!!)\b/i.test(l) ? 'bad' : /\b(warn(ing)?|timeout|retry|busy)\b/i.test(l) ? 'warn' : l.includes('== ') ? 'stepline' : '');
 
 async function api<T>(pass: string, url: string, init: RequestInit = {}): Promise<T> {
-  const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass } });
+  const r = await fetch(url, { credentials: 'same-origin', ...init, headers: authHeaders(pass, { 'Content-Type': 'application/json' }) });
   const b = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((b as { message?: string }).message || `Request failed (${r.status}).`);
   return b as T;

@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { Help } from '../ui/Help';
 import { DeployApp, History, LogBox, useJob } from '../ui/Ops';
 import type { AppInfo } from '../ui/Ops';
-import { Dot, Icon, Login, matches, newId, PROMPT_KEY } from '../lib';
+import { Dot, Icon, Login, authHeaders, matches, newId, PROMPT_KEY } from '../lib';
 import type { JobResult, Route, SiteState } from '../lib';
 
 const JOB_KEY = 'homelab-job2';
@@ -35,8 +35,8 @@ export default function Sites({ query, routes, sites, pass, onLogin }: { query: 
   const [error, setError] = useState('');
   const [savedPrompt, setSavedPrompt] = useState(false);
   const [apps, setApps] = useState<AppInfo[]>([]);
-  const loadApps = () => { if (pass) fetch('./api/apps', { headers: { 'x-dashboard-password': pass } }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); };
-  const loadCandidates = () => { if (pass) fetch('./api/aisites/candidates', { headers: { 'x-dashboard-password': pass } }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); };
+  const loadApps = () => { if (pass) fetch('./api/apps', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); };
+  const loadCandidates = () => { if (pass) fetch('./api/aisites/candidates', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); };
   useEffect(() => { loadApps(); loadCandidates(); }, [pass]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { try { localStorage.setItem('homelab-quality', quality); } catch { /* ignore */ } }, [quality]);
   useEffect(() => { if (job && job.state !== 'running') { loadApps(); loadCandidates(); } }, [job?.state]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -45,7 +45,7 @@ export default function Sites({ query, routes, sites, pass, onLogin }: { query: 
   const call = async (label: string, url: string, init: RequestInit = {}) => {
     setBusy(label); setError('');
     try {
-      const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass } });
+      const response = await fetch(url, { credentials: 'same-origin', ...init, headers: authHeaders(pass, { 'Content-Type': 'application/json' }) });
       const body = await response.json();
       if (!response.ok) throw new Error(body.message || 'Request failed.');
       return body;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Help } from '../ui/Help';
-import { Icon, Login, matches, newId, PROMPT_KEY } from '../lib';
+import { Icon, Login, authHeaders, matches, newId, PROMPT_KEY } from '../lib';
 import type { Notes } from '../lib';
 
 // ---------- notes (saved prompts, to-dos, scratch note), stored on the dashboard server ----------
@@ -12,14 +12,14 @@ function useNotes(pass: string) {
   const latest = useRef<Notes | null>(null);
   useEffect(() => {
     if (!pass) return;
-    fetch('./api/notes', { headers: { 'x-dashboard-password': pass } })
+    fetch('./api/notes', { credentials: 'same-origin', headers: authHeaders(pass) })
       .then(async (r) => { const b = await r.json(); if (!r.ok) throw new Error(b.message || 'Could not load notes.'); latest.current = b; setNotes(b); })
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not load notes.'));
   }, [pass]);
   const save = async (next: Notes) => {
     latest.current = next; setNotes(next); setState('saving');
     try {
-      const r = await fetch('./api/notes', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify(next) });
+      const r = await fetch('./api/notes', { method: 'PUT', credentials: 'same-origin', headers: authHeaders(pass, { 'Content-Type': 'application/json' }), body: JSON.stringify(next) });
       const b = await r.json();
       if (!r.ok) throw new Error(b.message || 'Could not save.');
       setState(latest.current === next ? 'saved' : 'saving'); setError('');

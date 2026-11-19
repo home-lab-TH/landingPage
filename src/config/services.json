@@ -84,11 +84,11 @@
     },
     {
       "id": "game",
-      "title": "Homelab Defender",
-      "description": "Cyber-rack tower defense web game (20 waves + Endless, EN / HE).",
+      "title": "Night Lab // Arcade 2077",
+      "description": "Cyberpunk 2077 Game Hub: 7 games incl. Homelab Defender, SSO saves & leaderboards.",
       "url": "./game/",
       "check": "http://10.0.0.250/game/",
-      "icon": "HD",
+      "icon": "NL",
       "ct": 101,
       "owner": "avraham",
       "repo": "https://github.com/lakylaky963/portfolio",
@@ -154,10 +154,10 @@
       "site agent"
     ],
     "110": [
-      "news · node 22"
+      "news Â· node 22"
     ],
     "111": [
-      "agents-hub · node 22",
+      "agents-hub Â· node 22",
       "cron agents"
     ]
   },

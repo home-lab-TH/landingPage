@@ -21,6 +21,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - run: node --test auth.test.mjs
       - run: npm run build
       - uses: actions/upload-artifact@v5
         with:
@@ -28,6 +29,7 @@ jobs:
           path: |
             dist/
             server.js
+            auth-store.js
             src/config/services.json
             package.json
             package-lock.json

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import config from '../config/services.json';
 import { Help } from '../ui/Help';
 import { HealthPanel, HistoryPanel, UptimeBars, useUptime } from '../ui/Charts';
-import { Bar, Dot, Icon, bytes, duration, level, matches, pct, ratio } from '../lib';
+import { Bar, Dot, Icon, authHeaders, bytes, duration, level, matches, pct, ratio } from '../lib';
 import type { Guest, SiteState, Stats } from '../lib';
 
 const stacks = config.stacks as Record<string, string[]>;
@@ -94,7 +94,7 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
     if (action !== 'start' && !window.confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${g.name} (${g.id})?`)) return;
     setBusy(g.id); setNote('');
     try {
-      const response = await fetch(`./api/guests/${g.id}/power/${action}`, { method: 'POST', headers: { 'x-dashboard-password': pass } });
+      const response = await fetch(`./api/guests/${g.id}/power/${action}`, { method: 'POST', credentials: 'same-origin', headers: authHeaders(pass) });
       const body: { message?: string } = await response.json();
       if (!response.ok) throw new Error(body.message || `${action} failed.`);
       setNote(`${action === 'start' ? 'Starting' : action === 'stop' ? 'Stopping' : 'Restarting'} ${g.name}…`);
@@ -104,7 +104,7 @@ export default function Overview({ query, stats, statsError, sites, pass }: { qu
     if (!window.confirm(`Delete ${g.type.toUpperCase()} ${g.id} (${g.name})? This destroys it and its disk.`)) return;
     setBusy(g.id); setNote('');
     try {
-      const response = await fetch(`./api/guests/${g.id}`, { method: 'DELETE', headers: { 'x-dashboard-password': pass } });
+      const response = await fetch(`./api/guests/${g.id}`, { method: 'DELETE', credentials: 'same-origin', headers: authHeaders(pass) });
       const body: { message?: string } = await response.json();
       if (!response.ok) throw new Error(body.message || 'Delete failed.');
       setNote(`Deleting ${g.name}…`);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Help } from '../ui/Help';
-import { Icon, Login } from '../lib';
+import { Icon, Login, authHeaders } from '../lib';
 import type { ProvisionType } from '../lib';
 
 export default function Provision({ pass, onLogin }: { pass: string; onLogin: (p: string) => void }) {
@@ -18,7 +18,7 @@ export default function Provision({ pass, onLogin }: { pass: string; onLogin: (p
     event.preventDefault();
     setState('loading'); setMessage('');
     try {
-      const response = await fetch('./api/proxmox/provision', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-dashboard-password': pass }, body: JSON.stringify({ type, name, cores, memory, disk, password: loginPass }) });
+      const response = await fetch('./api/proxmox/provision', { method: 'POST', credentials: 'same-origin', headers: authHeaders(pass, { 'Content-Type': 'application/json' }), body: JSON.stringify({ type, name, cores, memory, disk, password: loginPass }) });
       const data: { message?: string; task?: string; id?: number } = await response.json();
       if (!response.ok) throw new Error(data.message || 'Proxmox did not accept the request.');
       setState('success'); setMessage(`Creating ${type.toUpperCase()} ${data.id ?? ''} (${name}). It shows up on the Overview in a minute; delete it there if you don't need it.`);
