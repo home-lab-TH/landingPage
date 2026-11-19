@@ -81,6 +81,22 @@
         "EN / HE",
         "Live Stats"
       ]
+    },
+    {
+      "id": "game",
+      "title": "Homelab Defender",
+      "description": "Cyber-rack tower defense web game (20 waves + Endless, EN / HE).",
+      "url": "./game/",
+      "check": "http://10.0.0.250/game/",
+      "icon": "HD",
+      "ct": 101,
+      "owner": "avraham",
+      "repo": "https://github.com/lakylaky963/portfolio",
+      "tags": [
+        "Canvas 2D",
+        "WebAudio",
+        "EN / HE"
+      ]
     }
   ],
   "members": [
