@@ -831,7 +831,7 @@ test('20. Game Hub SSO flow: admin logs in on /api/auth/login -> /api/game/me ->
   const lbAll = await tApp.req('GET', '/api/game/leaderboard?game=all');
   assert.equal(lbAll.status, 200);
   assert.equal(lbAll.data.entries[0].combined_score, 18000);
-  assert.equal(lbAll.data.games.length, 7);
+  assert.equal(lbAll.data.games.length, 8);
 
   // Admin stats visible in /api/admin/users
   const adminUsers = await tApp.req('GET', '/api/admin/users', { cookie: owner.cookie });
@@ -1309,4 +1309,92 @@ test('31. Cloudflare headers (cf-connecting-ip, first XFF, cf-visitor https), ex
     cookie: owner.cookie,
     body: { name: 'jacobFlightMonitor', source_type: 'git', source: 'https://example.com/x.git' },
   })).status, 400);
+});
+
+test('32. POST /api/game/results: service token, strict body, idempotency, guests/bots, audit', async (t) => {
+  const prevToken = process.env.DASHBOARD_SERVICE_TOKEN;
+  const TOKEN = 'http-test-service-token-0123456789abcd';
+  const tApp = await startTestApp();
+  t.after(async () => {
+    if (prevToken === undefined) delete process.env.DASHBOARD_SERVICE_TOKEN;
+    else process.env.DASHBOARD_SERVICE_TOKEN = prevToken;
+    await tApp.close();
+  });
+  const owner = await bootstrapOwner(tApp);
+  const mkPlayer = (seat, over = {}) => ({
+    seat, kind: 'bot', handle: null, name: `Bot ${seat + 1}`, role: null, rank: seat + 1, winner: false,
+    cardsLeft: 3, handPoints: 20, score: 0, afk: false, timeouts: 0, botTurns: 0, ...over,
+  });
+  const body = {
+    game: 'wildcard', matchId: 'http-match-0123456', roomCode: 'BCDFG',
+    startedAt: '2026-11-20T10:00:00.000Z', endedAt: '2026-11-20T10:05:00.000Z', durationMs: 300000,
+    options: { seats: 3, stacking: true, turnSeconds: 15 }, humanPlayers: 2,
+    players: [
+      mkPlayer(0, { kind: 'user', handle: 'WildPlayer', name: 'WildPlayer', role: 'player', rank: 1, winner: true, cardsLeft: 0, handPoints: 0, score: 200 }),
+      mkPlayer(1, { kind: 'guest', name: 'Sam', rank: 2 }),
+      mkPlayer(2, { rank: 3 }),
+    ],
+  };
+
+  const reg = await tApp.req('POST', '/api/game/auth', { body: { handle: 'WildPlayer', pin: '246810' } });
+  assert.equal(reg.status, 201);
+
+  // Not configured: closed, even with a header.
+  delete process.env.DASHBOARD_SERVICE_TOKEN;
+  assert.equal((await tApp.req('POST', '/api/game/results', { headers: { Authorization: `Bearer ${TOKEN}` }, body })).status, 503);
+  process.env.DASHBOARD_SERVICE_TOKEN = TOKEN;
+
+  // Auth: no header, wrong token, a user session cookie, a user Bearer session token: all 401.
+  assert.equal((await tApp.req('POST', '/api/game/results', { body })).status, 401);
+  assert.equal((await tApp.req('POST', '/api/game/results', { headers: { Authorization: 'Bearer nope' }, body })).status, 401);
+  assert.equal((await tApp.req('POST', '/api/game/results', { cookie: owner.cookie, body })).status, 401);
+  assert.equal((await tApp.req('POST', '/api/game/results', { headers: { Authorization: `Bearer ${reg.data.token}` }, body })).status, 401);
+
+  // Strict validation.
+  const auth = { Authorization: `Bearer ${TOKEN}` };
+  const bad = await tApp.req('POST', '/api/game/results', { headers: auth, body: { ...body, extra: true } });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.data.ok, false);
+  assert.equal((await tApp.req('POST', '/api/game/results', { headers: auth, body: { ...body, game: 'defender' } })).status, 400);
+  assert.equal((await tApp.req('POST', '/api/game/results', { headers: { ...auth, 'Idempotency-Key': 'different-key-0123' }, body })).status, 400);
+
+  // Accepted once, paid once; the retry is a 200 duplicate that pays nothing more.
+  const ok1 = await tApp.req('POST', '/api/game/results', { headers: { ...auth, 'Idempotency-Key': body.matchId }, body });
+  assert.equal(ok1.status, 200);
+  assert.equal(ok1.data.duplicate, false);
+  assert.equal(ok1.data.awards.length, 1, 'only the signed-in user is paid; guest and bots are not listed');
+  assert.equal(ok1.data.awards[0].handle, 'wildplayer');
+  const ok2 = await tApp.req('POST', '/api/game/results', { headers: auth, body });
+  assert.equal(ok2.status, 200);
+  assert.equal(ok2.data.duplicate, true);
+
+  const me = await tApp.req('GET', '/api/game/me', { cookie: reg.cookie });
+  assert.equal(me.status, 200);
+  assert.equal(me.data.user.handle, 'WildPlayer');
+  assert.equal(me.data.user.xp, ok1.data.awards[0].xp);
+  assert.equal(me.data.user.profile.plays.wildcard, 1);
+  assert.equal(me.data.user.profile.wins.wildcard, 1);
+  assert.equal(me.data.user.profile.scores.wildcard, 200);
+
+  // afk and unknown users are skipped, not failed.
+  const second = { ...body, matchId: 'http-match-0123457', humanPlayers: 3, players: [
+    mkPlayer(0, { kind: 'user', handle: 'WildPlayer', name: 'WildPlayer', role: 'player', rank: 2, afk: true }),
+    mkPlayer(1, { kind: 'user', handle: 'NoSuchUser', name: 'Ghost', role: 'player', rank: 1, winner: true, cardsLeft: 0, handPoints: 0, score: 90 }),
+    mkPlayer(2, { kind: 'guest', name: 'Sam', rank: 3 }),
+  ] };
+  const ok3 = await tApp.req('POST', '/api/game/results', { headers: auth, body: second });
+  assert.equal(ok3.status, 200);
+  assert.deepEqual(ok3.data.awards.map((a) => a.reason).sort(), ['afk', 'unknown_user']);
+  assert.equal((await tApp.req('GET', '/api/game/me', { cookie: reg.cookie })).data.user.xp, ok1.data.awards[0].xp);
+
+  // Leaderboard (scores view) and audit log.
+  const lb = await tApp.req('GET', '/api/game/leaderboard?game=wildcard&limit=10');
+  assert.equal(lb.status, 200);
+  assert.equal(lb.data.entries.length, 1);
+  assert.equal(lb.data.entries[0].score, 200);
+  const audit = await tApp.req('GET', '/api/admin/audit?action=game.results', { cookie: owner.cookie });
+  assert.equal(audit.status, 200);
+  assert.ok(audit.data.logs.some((l) => l.status === 'ok' && l.target === body.matchId));
+  assert.ok(audit.data.logs.some((l) => l.status === 'denied'));
+  assert.equal(JSON.stringify(audit.data).includes(TOKEN), false);
 });

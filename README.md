@@ -50,6 +50,15 @@ Copy `.env.example` to `.env` and fill it in. Never commit `.env`. Variable name
 - Logs / updates: `HOST_AGENT_URL`, `HOST_AGENT_TOKEN`
 - Agents page: `HUB_URL`, `HUB_API_KEY`
 - Notes: `NOTES_FILE`
+- Game server results: `DASHBOARD_SERVICE_TOKEN` (shared secret for `POST /api/game/results`, at least 24 characters, entered by the owner on CT 105 and on the WILDCARD game server; unset = the endpoint answers 503)
+
+### Server-reported game results (WILDCARD // 2077)
+
+`POST /api/game/results` is called by the game server (CT 113), not by browsers. It needs `Authorization: Bearer <DASHBOARD_SERVICE_TOKEN>`
+(compared in constant time) and a strictly validated JSON body (see `wildcard-server/README.md` in `arcade-2077`, "Results contract").
+It is idempotent on `matchId` (and the `Idempotency-Key` header, which must equal it), pays XP and eddies only to `kind: "user"` entries whose
+account exists, is active and was not afk, writes a `game.results` audit entry, and records the match in `game_results` (unique `matchId`).
+The XP rules are in `game-results.js` (`computeAward`).
 
 ## Deploy
 
