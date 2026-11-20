@@ -16,4 +16,5 @@ jobs:
       - run: npm run build
       - run: node --check server.js
       - run: node --check auth-store.js
-      - run: node --test auth.test.mjs
+      - run: node --check game-results.js
+      - run: node --test auth.test.mjs wildcard-results.test.mjs

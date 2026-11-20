@@ -4,6 +4,7 @@ import path from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+import { SERVICE_TOKEN_ENV, createResultsHandler } from './game-results.js';
 import {
   ALL_PRIVILEGES,
   ROLE_PRESETS,
@@ -1103,6 +1104,16 @@ export function createApp(options = {}) {
       eddies: result.eddies,
     });
   });
+
+  // Server-reported results (WILDCARD // 2077). Not a user endpoint: the game server on CT 113 authenticates with
+  // `Authorization: Bearer <DASHBOARD_SERVICE_TOKEN>` (compared in constant time; the value lives only in the env),
+  // and the body is validated strictly. Idempotent on matchId / Idempotency-Key.
+  app.post('/api/game/results', createResultsHandler({
+    store,
+    getToken: () => process.env[SERVICE_TOKEN_ENV],
+    audit,
+    visitor,
+  }));
 
   app.get('/api/game/leaderboard', async (request, response) => {
     const game = String(request.query.game || 'all');

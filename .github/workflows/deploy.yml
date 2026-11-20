@@ -21,7 +21,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: node --test auth.test.mjs
+      - run: node --test auth.test.mjs wildcard-results.test.mjs
       - run: npm run build
       - uses: actions/upload-artifact@v5
         with:

@@ -115,7 +115,7 @@ export const PRIVILEGE_META: Record<string, { label: string; desc: string; group
   run_updates: { label: 'Run Updates', desc: 'Execute apt/system updates across containers', group: 'admin' },
   manage_settings: { label: 'Security Settings', desc: 'Modify dashboard configuration and security options', group: 'admin' },
   manage_users: { label: 'Users & Audit', desc: 'Manage accounts, recruiter guests, privileges and audit logs', group: 'admin' },
-  play_games: { label: 'Cyber Arcade 2077', desc: 'Sync Street Cred, Eddies and high scores across all 7 cabinets', group: 'arcade' },
+  play_games: { label: 'Cyber Arcade 2077', desc: 'Sync Street Cred, Eddies and high scores across all 8 cabinets', group: 'arcade' },
 };
 
 export const ROLE_META: Record<AuthRole, { label: string; cls: string; desc: string }> = {
@@ -133,6 +133,7 @@ export const ARCADE_GAMES = [
   { id: 'protocol', title: 'Breach Protocol', accent: '#00ff9f' },
   { id: 'overclock', title: 'OVERCLOCK // ICE Shatter', accent: '#ffaa00' },
   { id: 'lightcycle', title: 'LIGHTCYCLE // Trace', accent: '#00e5ff' },
+  { id: 'wildcard', title: 'WILDCARD // 2077', accent: '#ff5c8a' },
 ] as const;
 
 export const AVATAR_GLYPH: Record<string, string> = {

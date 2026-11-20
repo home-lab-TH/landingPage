@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { MongoClient, ObjectId } from 'mongodb';
+import { MIN_AWARD_DURATION_MS, computeAward } from './game-results.js';
 
 export const DEFAULT_MONGO_URI = 'mongodb://10.0.0.230:27017/homelab_auth';
 export const SESSION_COOKIE_NAME = 'homelab_session';
@@ -45,6 +46,7 @@ export const GAME_IDS = Object.freeze([
   'protocol',
   'overclock',
   'lightcycle',
+  'wildcard',
 ]);
 
 export const THEMES = Object.freeze(['yellow', 'cyan', 'crimson']);
@@ -481,6 +483,7 @@ function createMemoryDb() {
   const users = new Map();
   const sessions = new Map();
   const gameScores = [];
+  const matchResults = new Map();
   const auditLogs = [];
   let settingsAuth = { _id: 'auth', allowLegacyPassword: true, updatedAt: new Date() };
 
@@ -627,6 +630,23 @@ function createMemoryDb() {
       return gameScores.length;
     },
 
+    // Server-reported match results (idempotency ledger). Returns false when the matchId already exists.
+    async insertMatchResult(doc) {
+      if (matchResults.has(doc.matchId)) return false;
+      matchResults.set(doc.matchId, clone(doc));
+      return true;
+    },
+
+    async findMatchResult(matchId) {
+      const doc = matchResults.get(matchId);
+      return doc ? clone(doc) : null;
+    },
+
+    async updateMatchResult(matchId, setFields) {
+      const doc = matchResults.get(matchId);
+      if (doc) Object.assign(doc, clone(setFields));
+    },
+
     async deleteGameScoresByUserId(userId) {
       const target = String(userId);
       for (let i = gameScores.length - 1; i >= 0; i -= 1) {
@@ -740,6 +760,7 @@ function createMongoDb(mongoUri) {
         database.collection('game_scores').createIndex({ userId: 1, gameId: 1 }),
         database.collection('game_scores').createIndex({ gameId: 1, score: -1 }),
         database.collection('game_scores').createIndex({ createdAt: -1 }),
+        database.collection('game_results').createIndex({ matchId: 1 }, { unique: true }),
         database.collection('audit_logs').createIndex({ at: -1 }),
         database.collection('audit_logs').createIndex({ action: 1, at: -1 }),
         database.collection('audit_logs').createIndex({ sandboxTag: 1, at: -1 }),
@@ -883,6 +904,27 @@ function createMongoDb(mongoUri) {
     async countGameScores() {
       const scores = await col('game_scores');
       return scores.countDocuments();
+    },
+
+    async insertMatchResult(doc) {
+      const results = await col('game_results');
+      try {
+        await results.insertOne({ ...doc });
+        return true;
+      } catch (error) {
+        if (error && error.code === 11000) return false;
+        throw error;
+      }
+    },
+
+    async findMatchResult(matchId) {
+      const results = await col('game_results');
+      return results.findOne({ matchId });
+    },
+
+    async updateMatchResult(matchId, setFields) {
+      const results = await col('game_results');
+      await results.updateOne({ matchId }, { $set: setFields });
     },
 
     async deleteGameScoresByUserId(userId) {
@@ -1272,6 +1314,71 @@ export function createAuthStore({ mongoUri = process.env.MONGO_URI || DEFAULT_MO
         eddies: updated.eddies,
         user: updated,
       };
+    },
+
+    /**
+     * Store one finished match reported by the WILDCARD game server and award XP / eddies.
+     * Idempotent on matchId: the ledger row is inserted first (unique index), awards are
+     * written one user at a time and remembered on that row, so a retry never pays twice.
+     * Only `kind: "user"` entries whose account exists, is active and was not afk are paid.
+     * `result` must already be validated (game-results.js validateMatchResult).
+     */
+    async recordWildcardMatch(result, { now = Date.now, staleMs = 30_000 } = {}) {
+      const startedProcessing = new Date(now());
+      const fresh = await db.insertMatchResult({
+        matchId: result.matchId,
+        game: result.game,
+        roomCode: result.roomCode,
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+        durationMs: result.durationMs,
+        options: result.options,
+        humanPlayers: result.humanPlayers,
+        players: result.players.map((p) => ({ seat: p.seat, kind: p.kind, handle: p.handle, winner: p.winner, rank: p.rank, score: p.score, afk: p.afk })),
+        status: 'processing',
+        processingSince: startedProcessing,
+        awards: [],
+        receivedAt: startedProcessing,
+      });
+      let doc = await db.findMatchResult(result.matchId);
+      if (!fresh) {
+        if (doc && doc.status === 'done') return { duplicate: true, inProgress: false, awards: doc.awards || [] };
+        const since = doc && doc.processingSince ? new Date(doc.processingSince).getTime() : 0;
+        if (now() - since < staleMs) return { duplicate: true, inProgress: true, awards: [] };
+        // An earlier attempt died half way: resume, skipping users it already paid.
+      }
+      const awards = doc && Array.isArray(doc.awards) ? doc.awards.slice() : [];
+      const handled = new Set(awards.map((a) => a.handle));
+      const tooShort = result.durationMs < MIN_AWARD_DURATION_MS;
+
+      for (const player of result.players) {
+        if (player.kind !== 'user' || handled.has(player.handle)) continue;
+        const base = { seat: player.seat, handle: player.handle };
+        const user = await db.findUserByUsernameLower(player.handle.toLowerCase());
+        let entry;
+        if (!user) entry = { ...base, status: 'skipped', reason: 'unknown_user' };
+        else if (user.disabled || isUserExpired(user, now())) entry = { ...base, status: 'skipped', reason: 'inactive_user' };
+        else if (!hasPrivilege(user, 'play_games')) entry = { ...base, status: 'skipped', reason: 'no_play_privilege' };
+        else if (player.afk) entry = { ...base, status: 'skipped', reason: 'afk' };
+        else if (tooShort) entry = { ...base, status: 'skipped', reason: 'too_short' };
+        else {
+          const award = computeAward(player, result);
+          const recorded = await this.recordGameScore({
+            userId: user._id,
+            gameId: 'wildcard',
+            score: award.score,
+            wave: award.wave,
+            won: award.won,
+            eddies: award.eddies,
+            xp: award.xp,
+          });
+          entry = { ...base, status: 'awarded', won: award.won, score: award.score, xp: award.xp, eddies: award.eddies, rank: recorded.rank };
+        }
+        awards.push(entry);
+        await db.updateMatchResult(result.matchId, { awards });
+      }
+      await db.updateMatchResult(result.matchId, { status: 'done', awards, finishedAt: new Date(now()) });
+      return { duplicate: !fresh, inProgress: false, awards };
     },
 
     async getLeaderboard({ game = 'all', limit = 20 } = {}) {

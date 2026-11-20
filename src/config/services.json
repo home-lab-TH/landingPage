@@ -85,7 +85,7 @@
     {
       "id": "game",
       "title": "Night Lab // Arcade 2077",
-      "description": "Cyberpunk 2077 Game Hub: 7 games incl. Homelab Defender, SSO saves & leaderboards.",
+      "description": "Cyberpunk 2077 Game Hub: 8 games incl. Homelab Defender, SSO saves & leaderboards.",
       "url": "./game/",
       "check": "http://10.0.0.250/game/",
       "icon": "NL",
