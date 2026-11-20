@@ -30,6 +30,7 @@ jobs:
             dist/
             server.js
             auth-store.js
+            game-results.js
             src/config/services.json
             package.json
             package-lock.json
