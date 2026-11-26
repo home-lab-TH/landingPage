@@ -1738,7 +1738,8 @@ export function createApp(options = {}) {
   // ---------- agents hub (CT 111, Mission Control) ----------
   const rows = (data, key) => (Array.isArray(data) ? data : Array.isArray(data?.[key]) ? data[key] : []);
   const slimAgent = (a) => ({ id: a.id, name: a.name, role: a.role, status: a.status, last_seen: a.last_seen ?? null, last_activity: a.last_activity ?? '' });
-  const slimTask = (t) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, assigned_to: t.assigned_to ?? null, updated_at: t.updated_at ?? t.created_at ?? null, tags: Array.isArray(t.tags) ? t.tags : [] });
+  const slimTask = (t) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, assigned_to: t.assigned_to ?? null, updated_at: t.updated_at ?? t.created_at ?? null, tags: Array.isArray(t.tags) ? t.tags : [], description: t.description ?? '', created_at: t.created_at ?? null });
+  const slimComment = (c) => ({ id: c.id, author: c.author ?? c.created_by ?? 'agent', body: c.content ?? c.body ?? c.text ?? '', at: c.created_at ?? null });
   const slimActivity = (e) => ({ id: e.id, type: e.type, actor: e.actor ?? '', description: e.description ?? '', at: e.created_at ?? null });
 
   let hubCache = { at: 0, data: null };
@@ -1761,7 +1762,25 @@ export function createApp(options = {}) {
     } catch (error) { return fail(response, error); }
   });
 
+  // One task + its comments (phone-worker posts the agent's output as a comment when it finishes).
+  app.get('/api/hub/tasks/:id', requirePriv('view_agents'), async (request, response) => {
+    const id = String(request.params.id);
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) return response.status(400).json({ message: 'Bad task id.' });
+    try {
+      const got = await hubCall('GET', `/api/tasks/${id}`);
+      const task = got?.task ?? got;
+      let comments;
+      try { comments = rows(await hubCall('GET', `/api/tasks/${id}/comments`), 'comments'); } catch (error) {
+        if (error.status !== 404) throw error;
+        comments = Array.isArray(task?.comments) ? task.comments : [];
+      }
+      return response.json({ task: slimTask(task), comments: comments.map(slimComment) });
+    } catch (error) { return fail(response, error); }
+  });
+
   const HUB_PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
+  // Dashboard model choice -> the tag phone-worker.py reads (opus/haiku/sonnet for claude-ops, antigravity for Gemini).
+  const HUB_MODEL_TAGS = { sonnet: 'sonnet', opus: 'opus', haiku: 'haiku', gemini: 'antigravity' };
   app.post('/api/hub/tasks', requirePriv('view_agents'), async (request, response) => {
     const title = String(request.body?.title ?? '').trim();
     const description = String(request.body?.description ?? '').trim();
@@ -1770,6 +1789,13 @@ export function createApp(options = {}) {
     if (title.length < 3 || title.length > 200) return response.status(400).json({ message: 'Give the task a title of 3 to 200 characters.' });
     if (description.length > 4000) return response.status(400).json({ message: 'That description is too long (4000 characters max).' });
     if (!HUB_PRIORITIES.has(priority)) return response.status(400).json({ message: 'Priority must be low, medium, high or critical.' });
+    const model = String(request.body?.model ?? '').trim();
+    if (model && !Object.hasOwn(HUB_MODEL_TAGS, model)) return response.status(400).json({ message: 'Model must be sonnet, opus, haiku or gemini.' });
+    const rawTags = request.body?.tags ?? [];
+    if (!Array.isArray(rawTags) || rawTags.length > 5 || !rawTags.every((x) => typeof x === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/i.test(x))) {
+      return response.status(400).json({ message: 'Tags must be up to 5 short letters/digits/-/_ words.' });
+    }
+    const extraTags = [...new Set([...(model ? [HUB_MODEL_TAGS[model]] : []), ...rawTags.map((x) => x.toLowerCase())])].filter((x) => x !== 'from-dashboard').slice(0, 5);
     try {
       const known = rows(await hubCall('GET', '/api/agents?limit=50'), 'agents').map((a) => a.name);
       if (assigned && !known.includes(assigned)) return response.status(400).json({ message: `Unknown agent "${assigned}".` });
@@ -1778,11 +1804,11 @@ export function createApp(options = {}) {
         status: assigned ? 'assigned' : 'inbox',
         ...(assigned ? { assigned_to: assigned } : {}),
         created_by: request.actor?.username || 'dashboard',
-        tags: ['from-dashboard'],
+        tags: ['from-dashboard', ...extraTags],
       });
       hubCache = { at: 0, data: null };
       const task = created?.task ?? created;
-      await audit(request, 'hub.task_create', title, 'ok', { assigned_to: assigned || null, priority });
+      await audit(request, 'hub.task_create', title, 'ok', { assigned_to: assigned || null, priority, tags: extraTags });
       return response.status(201).json({ task: slimTask(task) });
     } catch (error) { return fail(response, error); }
   });

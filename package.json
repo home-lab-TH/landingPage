@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start": "node --env-file-if-exists=.env server.js",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "test": "node --test auth.test.mjs wildcard-results.test.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

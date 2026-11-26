@@ -1398,3 +1398,58 @@ test('32. POST /api/game/results: service token, strict body, idempotency, guest
   assert.ok(audit.data.logs.some((l) => l.status === 'denied'));
   assert.equal(JSON.stringify(audit.data).includes(TOKEN), false);
 });
+
+test('33. agents hub: task detail + comments (with 404 fallback), model/tags on task create', async (t) => {
+  const prev = process.env.DASHBOARD_PASSWORD;
+  delete process.env.DASHBOARD_PASSWORD;
+  const posted = [];
+  const tApp = await startTestApp({
+    hubCallImpl: async (m, p, body) => {
+      if (m === 'GET' && p.startsWith('/api/agents')) return { agents: [{ id: 1, name: 'claude-ops', role: 'ops', status: 'idle' }, { id: 2, name: 'antigravity', role: 'gemini', status: 'idle' }] };
+      if (m === 'POST' && p === '/api/tasks') { posted.push(body); return { task: { id: 42, ...body } }; }
+      if (m === 'GET' && p === '/api/tasks/42') return { task: { id: 42, title: 'Check disks', description: 'all CTs', status: 'done', priority: 'medium', assigned_to: 'claude-ops', tags: ['from-dashboard', 'opus'], created_at: 100, updated_at: 200 } };
+      if (m === 'GET' && p === '/api/tasks/42/comments') return { comments: [{ id: 9, author: 'claude-ops', content: 'disk ok', created_at: 150 }] };
+      if (m === 'GET' && p === '/api/tasks/7') return { id: 7, title: 'Old', status: 'done', priority: 'low', comments: [{ id: 1, created_by: 'gemini-bulk', text: 'legacy out' }] };
+      if (m === 'GET' && p === '/api/tasks/7/comments') throw Object.assign(new Error('nope'), { status: 404 });
+      throw Object.assign(new Error('unexpected'), { status: 500 });
+    },
+    pveImpl: async () => [],
+  });
+  t.after(async () => {
+    if (prev !== undefined) process.env.DASHBOARD_PASSWORD = prev;
+    await tApp.close();
+  });
+  const owner = await bootstrapOwner(tApp, { username: 'owner', password: 'OwnerSecret!99' });
+  const cookie = owner.cookie;
+
+  const detail = await tApp.req('GET', '/api/hub/tasks/42', { cookie });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.data.task.description, 'all CTs');
+  assert.equal(detail.data.task.created_at, 100);
+  assert.deepEqual(detail.data.comments, [{ id: 9, author: 'claude-ops', body: 'disk ok', at: 150 }]);
+
+  const legacy = await tApp.req('GET', '/api/hub/tasks/7', { cookie });
+  assert.equal(legacy.status, 200);
+  assert.deepEqual(legacy.data.comments, [{ id: 1, author: 'gemini-bulk', body: 'legacy out', at: null }]);
+  assert.equal(legacy.data.task.description, '');
+
+  assert.equal((await tApp.req('GET', '/api/hub/tasks/bad%20id', { cookie })).status, 400);
+  assert.equal((await tApp.req('GET', '/api/hub/tasks/42')).status, 401);
+
+  const opus = await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Check disks', description: 'all CTs', assigned_to: 'claude-ops', model: 'opus', priority: 'high' } });
+  assert.equal(opus.status, 201);
+  assert.deepEqual(posted.at(-1).tags, ['from-dashboard', 'opus']);
+
+  const gem = await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Refresh graph', assigned_to: 'antigravity', model: 'gemini', tags: ['graphify'] } });
+  assert.equal(gem.status, 201);
+  assert.deepEqual(posted.at(-1).tags, ['from-dashboard', 'antigravity', 'graphify']);
+
+  const plain = await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Plain task' } });
+  assert.equal(plain.status, 201);
+  assert.deepEqual(posted.at(-1).tags, ['from-dashboard']);
+
+  assert.equal((await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Bad model', model: 'gpt' } })).status, 400);
+  assert.equal((await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Bad tags', tags: ['ok', 'no spaces'] } })).status, 400);
+  assert.equal((await tApp.req('POST', '/api/hub/tasks', { cookie, body: { title: 'Too many', tags: ['a', 'b', 'c', 'd', 'e', 'f'] } })).status, 400);
+  assert.equal(posted.length, 3);
+});
