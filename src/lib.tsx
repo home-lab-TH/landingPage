@@ -25,7 +25,9 @@ export type Site = (typeof config.sites)[number];
 export type Route = { name: string; title: string; path: string; kind: string };
 // ---- agents hub (CT 111, Mission Control), served by ./api/hub ----
 export type HubAgent = { id: number; name: string; role: string; status: string; last_seen: number | null; last_activity: string };
-export type HubTask = { id: number; title: string; status: string; priority: string; assigned_to: string | null; updated_at: number | null; tags: string[] };
+export type HubTask = { id: number; title: string; status: string; priority: string; assigned_to: string | null; updated_at: number | null; tags: string[]; description?: string; created_at?: number | null };
+export type HubComment = { id: number; author: string; body: string; at: number | null };
+export type HubTaskDetail = { task: HubTask; comments: HubComment[] };
 export type HubEvent = { id: number; type: string; actor: string; description: string; at: number | null };
 export type HubData = { agents: HubAgent[]; tasks: HubTask[]; activity: HubEvent[]; at: string };
 export type JobResult = { name: string; title?: string; url: string; admin_url: string; admin_user?: string; admin_password?: string; plugins?: string[]; ai_note?: string };
@@ -720,6 +722,9 @@ export const Icon = ({ name, className = 'icon' }: { name: string; className?: s
     copy: <><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>,
     gamepad: <><line x1="6" y1="11" x2="10" y2="11" /><line x1="8" y1="9" x2="8" y2="13" /><line x1="15" y1="12" x2="15.01" y2="12" /><line x1="18" y1="10" x2="18.01" y2="10" /><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5Z" /></>,
     activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
+    terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3" /><path d="M13 15h4" /></>,
+    chevron: <path d="m6 9 6 6 6-6" />,
+    back: <path d="m15 18-6-6 6-6" />,
     alert: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>,
   };
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
