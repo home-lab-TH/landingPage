@@ -188,64 +188,97 @@ export default function LoginPage({
           <p className="muted"><span className="spinner" /> Checking session…</p>
         </section>
       ) : user ? (
-        <div className="login-session-grid">
-          <section className="panel session-card">
-            <div className="session-top">
-              <div className="session-identity">
-                <span className={`user-avatar role-${roleInfo?.cls ?? 'player'}`} aria-hidden="true">
-                  {AVATAR_GLYPH[user.avatar] ?? '◈'}
-                </span>
-                <div>
-                  <div className="session-title-row">
-                    <h2>{user.displayName}</h2>
-                    {roleInfo && <span className={`role-badge ${roleInfo.cls}`}>{roleInfo.label}</span>}
-                    {user.isLegacy && <span className="pill">Legacy Token</span>}
+        <div className="grid-2 login-session-grid">
+          <div className="login-col">
+            <section className="panel session-card">
+              <div className="panel-head"><h2><Icon name="users" />Account &amp; Session</h2></div>
+              <div className="session-top">
+                <div className="session-identity">
+                  <span className={`user-avatar role-${roleInfo?.cls ?? 'player'}`} aria-hidden="true">
+                    {AVATAR_GLYPH[user.avatar] ?? '◈'}
+                  </span>
+                  <div>
+                    <div className="session-title-row">
+                      <h2>{user.displayName}</h2>
+                      {roleInfo && <span className={`role-badge ${roleInfo.cls}`}>{roleInfo.label}</span>}
+                      {user.isLegacy && <span className="pill">Legacy Token</span>}
+                    </div>
+                    <p className="mono dim">@{user.username}{user.note ? ` · ${user.note}` : ''}</p>
+                    {roleInfo && <p className="muted">{roleInfo.desc}</p>}
                   </div>
-                  <p className="mono dim">@{user.username}{user.note ? ` · ${user.note}` : ''}</p>
+                </div>
+                {expiry && (
+                  <div className={`countdown-pill ${expiry.expired ? 'expired' : expiry.urgent ? 'urgent' : ''}`}>
+                    <Icon name="clock" className="icon-xs" />
+                    <span>{expiry.text}</span>
+                    <small className="dim">({formatDateTime(user.expiresAt)})</small>
+                  </div>
+                )}
+              </div>
+
+              <div className="arcade-strip">
+                <div className="tile">
+                  <small>Street Cred</small>
+                  <b>LVL {cred.level}</b>
+                  <span className="muted mono">{(user.xp ?? 0).toLocaleString()} XP</span>
+                </div>
+                <div className="tile">
+                  <small>Eddies</small>
+                  <b>€$ {(user.eddies ?? 0).toLocaleString()}</b>
+                  <span className="muted mono">Arcade bank</span>
+                </div>
+                <div className="tile">
+                  <small>Combined Score</small>
+                  <b>{combinedScore.toLocaleString()}</b>
+                  <span className="muted mono">{ARCADE_GAMES.length} cabinets</span>
+                </div>
+                <div className="tile">
+                  <small>Total Runs</small>
+                  <b>{totalPlays.toLocaleString()}</b>
+                  <span className="muted mono">Synced via SSO</span>
                 </div>
               </div>
-              {expiry && (
-                <div className={`countdown-pill ${expiry.expired ? 'expired' : expiry.urgent ? 'urgent' : ''}`}>
-                  <Icon name="clock" className="icon-xs" />
-                  <span>{expiry.text}</span>
-                  <small className="dim">({formatDateTime(user.expiresAt)})</small>
-                </div>
-              )}
-            </div>
+            </section>
 
-            <div className="quick-links">
-              <a className="btn solid" href="#/"><Icon name="grid" />Overview</a>
-              {hasPriv(user, 'manage_users') && (
-                <a className="btn" href="#/users"><Icon name="users" />Users &amp; Audit</a>
-              )}
-              <a className="btn" href="./game/"><Icon name="gamepad" />Cyberpunk Game Hub</a>
-            </div>
+            {!user.isLegacy ? (
+              user.role === 'recruiter_guest' ? (
+                <details className="panel more">
+                  <summary><Icon name="key" className="icon-xs" />Change Temporary Guest Password</summary>
+                  {changePasswordForm}
+                </details>
+              ) : (
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2><Icon name="key" />{isPlayer ? 'Change PIN' : 'Change Password'}</h2>
+                  </div>
+                  {changePasswordForm}
+                </section>
+              )
+            ) : (
+              <section className="panel notice">
+                <h2><Icon name="key" />Legacy Session</h2>
+                <p className="muted">You unlocked with the legacy main password. Sign in with an SSO account to manage passwords or sync Arcade scores.</p>
+              </section>
+            )}
+          </div>
 
-            <div className="arcade-strip">
-              <div className="tile">
-                <small>Street Cred</small>
-                <b>LVL {cred.level}</b>
-                <span className="muted mono">{(user.xp ?? 0).toLocaleString()} XP</span>
+          <div className="login-col">
+            <section className="panel">
+              <div className="panel-head"><h2><Icon name="grid" />Quick Navigation</h2></div>
+              <div className="quick-links">
+                <a className="btn solid" href="#/"><Icon name="grid" />Overview</a>
+                {hasPriv(user, 'manage_users') && (
+                  <a className="btn" href="#/users"><Icon name="users" />Users &amp; Audit</a>
+                )}
+                <a className="btn" href="./game/"><Icon name="gamepad" />Cyberpunk Game Hub</a>
               </div>
-              <div className="tile">
-                <small>Eddies</small>
-                <b>€$ {(user.eddies ?? 0).toLocaleString()}</b>
-                <span className="muted mono">Arcade bank</span>
-              </div>
-              <div className="tile">
-                <small>Combined Score</small>
-                <b>{combinedScore.toLocaleString()}</b>
-                <span className="muted mono">{ARCADE_GAMES.length} cabinets</span>
-              </div>
-              <div className="tile">
-                <small>Total Runs</small>
-                <b>{totalPlays.toLocaleString()}</b>
-                <span className="muted mono">Synced via SSO</span>
-              </div>
-            </div>
+            </section>
 
-            <div className="session-privs">
-              <h3><Icon name="shield" className="icon-xs" />Assigned Privileges <span className="count">{effectivePrivileges.length}</span></h3>
+            <section className="panel session-privs">
+              <div className="panel-head">
+                <h2><Icon name="shield" />Assigned Privileges</h2>
+                <span className="count">{effectivePrivileges.length}</span>
+              </div>
               {user.role === 'recruiter_guest' && (
                 <p className="sandbox-note">
                   <Icon name="alert" className="icon-xs" />
@@ -264,29 +297,8 @@ export default function LoginPage({
                 })}
                 {effectivePrivileges.length === 0 && <p className="muted">No privileges assigned to this account.</p>}
               </div>
-            </div>
-          </section>
-
-          {!user.isLegacy ? (
-            user.role === 'recruiter_guest' ? (
-              <details className="panel more">
-                <summary><Icon name="key" className="icon-xs" />Change Temporary Guest Password</summary>
-                {changePasswordForm}
-              </details>
-            ) : (
-              <section className="panel">
-                <div className="panel-head">
-                  <h2><Icon name="key" />{isPlayer ? 'Change PIN' : 'Change Password'}</h2>
-                </div>
-                {changePasswordForm}
-              </section>
-            )
-          ) : (
-            <section className="panel notice">
-              <h2><Icon name="key" />Legacy Session</h2>
-              <p className="muted">You unlocked with the legacy main password. Sign in with an SSO account to manage passwords or sync Arcade scores.</p>
             </section>
-          )}
+          </div>
         </div>
       ) : isLegacyOnly ? (
         <div className="login-layout">
@@ -319,29 +331,24 @@ export default function LoginPage({
             allowLegacyPassword={allowLegacyPassword}
           />
           <aside className="panel login-aside">
-            <p className="eyebrow"><Icon name="spark" className="icon-xs" />Night Lab // SSO</p>
-            <h2>One identity everywhere</h2>
-            <p className="muted">
-              Your session cookie secures both the Proxmox infrastructure dashboard and the Night Lab Arcade 2077 cabinets.
-            </p>
+            <p className="eyebrow"><Icon name="spark" className="icon-xs" />Welcome</p>
+            <h2>One sign-in for the whole lab</h2>
+            <p className="muted">Your session covers the dashboard and the Cyber Arcade. What you can see depends on your role:</p>
             <ul className="aside-list">
               <li>
                 <span className="role-badge owner">OWNER</span>
-                <span>Full server, provisioning, settings, and RBAC control.</span>
+                <span>Full control of the server, settings and user access.</span>
               </li>
               <li>
-                <span className="role-badge admin">ADMIN</span>
-                <span>Granular operator access across containers, sites, logs, and agents.</span>
+                <span className="role-badge admin">MEMBER</span>
+                <span>Team access to the containers, sites and logs you've been granted.</span>
               </li>
               <li>
-                <span className="role-badge guest">RECRUITER GUEST</span>
-                <span>Time-limited sandbox credentials with full audit trail (CT 102 protected).</span>
-              </li>
-              <li>
-                <span className="role-badge player">PLAYER</span>
-                <span>Arcade 2077 cloud profile, Street Cred XP, Eddies, and leaderboards.</span>
+                <span className="role-badge guest">RECRUITER SANDBOX</span>
+                <span>Time-limited, fully audited guest login. CT 102 stays protected.</span>
               </li>
             </ul>
+            <p className="muted">Just here to play? Arcade players sign in with a username and PIN.</p>
             <a className="btn" href="/game/"><Icon name="gamepad" />Launch Cyberpunk Game Hub</a>
           </aside>
         </div>

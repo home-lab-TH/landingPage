@@ -65,12 +65,37 @@ export default function Topology({ stats, pass }: { stats: Stats | null; pass: s
 
   const sel = by[picked];
   const g = sel?.guest;
+  const guestNodes = nodes.filter((n) => n.guest);
+  const runningCount = guestNodes.filter((n) => n.guest?.status === 'running').length;
+  const stoppedCount = guestNodes.length - runningCount;
+  const routedPath = sel && ROUTED.includes(Number(sel.id)) ? `CT 101 → CT ${sel.id}` : null;
   return (
     <>
       <header className="page-head">
         <h1>Topology</h1>
         <p className="lede">How a request reaches each app. Drag to arrange, click for details.</p>
       </header>
+      <div className="services-summary" aria-label="Topology summary">
+        <span className="summary-chip"><b>{nodes.length}</b> node{nodes.length === 1 ? '' : 's'}</span>
+        <span className="summary-chip ok"><span className="led-dot on" aria-hidden="true">●</span><b>{runningCount}</b> running</span>
+        <span className={`summary-chip ${stoppedCount ? 'warn' : ''}`}><span className="led-dot off" aria-hidden="true">●</span><b>{stoppedCount}</b> stopped</span>
+        <span className="summary-chip muted"><Icon name="map" className="icon-xs" />Click any node for details · drag to arrange</span>
+      </div>
+      {guestNodes.length > 0 && (
+        <div className="filter-bar">
+          <div className="filter-pills" role="group" aria-label="Select a node">
+            {nodes.map((n) => {
+              const on = n.guest ? n.guest.status === 'running' : true;
+              return (
+                <button key={n.id} type="button" className={`filter-pill ${picked === n.id ? 'active on' : ''}`} aria-pressed={picked === n.id} onClick={() => setPicked(n.id)} title={`${n.label}: ${on ? 'running' : 'stopped'}`}>
+                  <span className={`led-dot ${on ? 'on' : 'off'}`} aria-hidden="true" style={{ color: on ? 'var(--ok, #3fb950)' : 'var(--bad, #f85149)' }}>●</span> {n.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {!stats && <p className="muted hint">Waiting for live stats from Proxmox… the map fills in as soon as they arrive.</p>}
       <div className="topo">
         <section className="panel topo-map">
           <div className="panel-head"><h2><Icon name="map" />Network</h2><button type="button" className="ghost" onClick={reset}>Reset layout</button></div>
@@ -104,15 +129,19 @@ export default function Topology({ stats, pass }: { stats: Stats | null; pass: s
           </svg>
         </section>
         <aside className="panel topo-info">
-          {!sel && <p className="muted">Click a node.</p>}
+          {!sel && <p className="muted empty-state">Click a node on the map (or a pill above) to see its details.</p>}
           {sel && (
             <>
-              <p className="eyebrow">{sel.kind === 'edge' ? 'Entry point' : pass ? sel.sub : sel.sub}</p>
+              <p className="eyebrow">{sel.kind === 'edge' ? 'Entry point' : sel.kind === 'proxy' ? 'Reverse proxy' : sel.kind === 'db' ? 'Database' : 'Service'}{pass && sel.kind !== 'edge' ? ` · ${sel.sub}` : ''}</p>
               <h2>{sel.label}</h2>
               {sel.kind === 'edge' ? (
                 <p className="muted">Public traffic arrives over Tailscale Funnel at central-proxy.bluebuck-tailor.ts.net and is routed by nginx on CT 101.</p>
               ) : g && (
                 <>
+                  <p className="status-line"><span className={`pill ${g.status === 'running' ? 'ok' : 'bad'}`}><span aria-hidden="true">●</span> {g.status === 'running' ? 'Running' : g.status}</span>
+                    {g.status === 'running' && <span className="muted"> up {duration(g.uptime)}</span>}</p>
+                  {routedPath && <p className="muted hint">Traffic path: Internet → {routedPath}</p>}
+                  <h3 className="muted">Details</h3>
                   <dl className="facts">
                     <dt>Status</dt><dd>{g.status}</dd>
                     {pass && <><dt>Address</dt><dd className="mono">{network[sel.id] ?? '–'}</dd></>}
@@ -123,14 +152,18 @@ export default function Topology({ stats, pass }: { stats: Stats | null; pass: s
                       <dt>Disk</dt><dd className="mono">{pct(ratio(g.disk, g.maxdisk))}</dd>
                     </>}
                   </dl>
-                  {stacks[sel.id] && <div className="chips">{stacks[sel.id].map((c) => <span key={c} className="chip">{c}</span>)}</div>}
-                  {sel.id === '102' ? (
-                    <span className="pill"><Icon name="lock" className="icon-xs" />Protected</span>
-                  ) : pass ? (
-                    <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a>
-                  ) : (
-                    <a className="link muted" href="#/login">Unlock for IP, metrics &amp; logs →</a>
-                  )}
+                  {stacks[sel.id] && <><h3 className="muted">Stack</h3><div className="chips">{stacks[sel.id].map((c) => <span key={c} className="chip">{c}</span>)}</div></>}
+                  <h3 className="muted">Quick links</h3>
+                  <div className="result-links">
+                    {sel.id === '102' ? (
+                      <span className="pill"><Icon name="lock" className="icon-xs" />Protected</span>
+                    ) : pass ? (
+                      <a className="link" href={`#/logs/ct-${sel.id}`}>Logs →</a>
+                    ) : (
+                      <a className="link muted" href="#/login">Unlock for IP, metrics &amp; logs →</a>
+                    )}
+                    <a className="link" href="#/services">All services →</a>
+                  </div>
                 </>
               )}
             </>

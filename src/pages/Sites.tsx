@@ -35,6 +35,7 @@ export default function Sites({ query, routes, sites, pass, user = null, onLogin
   const [error, setError] = useState('');
   const [savedPrompt, setSavedPrompt] = useState(false);
   const [apps, setApps] = useState<AppInfo[]>([]);
+  const [filter, setFilter] = useState<SiteFilter>('all');
   const loadApps = useCallback(() => { if (pass) fetch('./api/apps', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { apps: [] })).then((b: { apps?: AppInfo[] }) => setApps(b.apps ?? [])).catch(() => undefined); }, [pass]);
   const loadCandidates = useCallback(() => { if (pass) fetch('./api/aisites/candidates', { credentials: 'same-origin', headers: authHeaders(pass) }).then((r) => (r.ok ? r.json() : { containers: [] })).then((b: { containers?: Candidate[] }) => setCandidates(b.containers ?? [])).catch(() => undefined); }, [pass]);
   useEffect(() => { loadApps(); loadCandidates(); }, [loadApps, loadCandidates]);
@@ -118,7 +119,11 @@ export default function Sites({ query, routes, sites, pass, user = null, onLogin
   const startEdit = (r: Route, kind: 'wp' | 'aisite', ctid?: number) => { setEditing({ route: r, kind, ctid }); window.scrollTo({ top: 0, behavior: 'smooth' }); window.setTimeout(() => box.current?.focus(), 300); };
 
   const running = job?.state === 'running';
-  const shown = routes.filter((r) => matches(query, r.name, r.title, r.path, r.kind));
+  const searched = routes.filter((r) => matches(query, r.name, r.title, r.path, r.kind));
+  const shown = searched.filter((r) => FILTERS[filter].test(r.kind));
+  const onlineCount = routes.filter((r) => sites[`route:${r.name}`]?.up).length;
+  const webCount = routes.filter((r) => FILTERS.web.test(r.kind)).length;
+  const countFor = (f: SiteFilter) => searched.filter((r) => FILTERS[f].test(r.kind)).length;
   const isWp = !editing && where === 'wp';
   const ready = editing ? prompt.trim().length > 3 : SITE_NAME.test(name) && (isWp ? sitePass.length >= 8 : prompt.trim().length > 3);
   const result = job?.result as (JobResult & { summary?: string; notes?: string; target?: string }) | null | undefined;
@@ -198,7 +203,24 @@ export default function Sites({ query, routes, sites, pass, user = null, onLogin
       )}
 
       <section className="panel">
-        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added; the dot shows whether each answers. Edit with AI: describe a change. Undo: go back one AI change. wp-admin: edit a WordPress site by hand (user admin). Update (apps): pulls the newest code or image. logs: the app's log. Delete asks first; a site on one of your own containers is removed but the container stays.</Help></h2><span className="muted">{shown.length} extra site{shown.length === 1 ? '' : 's'}</span></div>
+        <div className="panel-head"><h2><Icon name="grid" />Your sites <Help title="Your sites">Websites and apps you added; the dot shows whether each answers. Edit with AI: describe a change. Undo: go back one AI change. wp-admin: edit a WordPress site by hand (user admin). Update (apps): pulls the newest code or image. logs: the app's log. Delete asks first; a site on one of your own containers is removed but the container stays.</Help></h2><span className="muted">{shown.length} of {routes.length} shown</span></div>
+        <div className="services-summary" aria-label="Sites summary">
+          <span className="summary-chip"><b>{routes.length}</b> route{routes.length === 1 ? '' : 's'}</span>
+          <span className="summary-chip ok"><Dot state="up" /><b>{onlineCount}</b> online</span>
+          {routes.length - onlineCount > 0 && <span className="summary-chip warn"><b>{routes.length - onlineCount}</b> offline / unknown</span>}
+          <span className="summary-chip"><Icon name="spark" className="icon-xs" /><b>{webCount}</b> WordPress / AI</span>
+        </div>
+        {routes.length > 0 && (
+          <div className="filter-bar">
+            <div className="filter-pills" role="group" aria-label="Filter sites by type">
+              {(Object.keys(FILTERS) as SiteFilter[]).map((f) => (
+                <button key={f} type="button" className={`filter-pill ${filter === f ? 'active on' : ''}`} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+                  {FILTER_LABEL[f]} <span className="muted">{countFor(f)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <ul className="site-list">
           {shown.map((r) => {
             const state = sites[`route:${r.name}`];
@@ -218,7 +240,13 @@ export default function Sites({ query, routes, sites, pass, user = null, onLogin
               </li>
             );
           })}
-          {!shown.length && <li className="muted">No extra sites yet.</li>}
+          {!shown.length && (
+            <li className="muted empty-state">
+              {!routes.length ? <>No extra sites yet. Describe one above and press Create.</>
+                : !searched.length ? <>No sites match “{query}”. Clear the search to see all {routes.length}.</>
+                  : <>No {FILTER_LABEL[filter]} sites{query ? ' match this search' : ''}. <button type="button" className="link" onClick={() => setFilter('all')}>Show all</button></>}
+            </li>
+          )}
         </ul>
       </section>
       {pass && <DeployApp pass={pass} onDone={loadApps} />}
@@ -237,3 +265,11 @@ export default function Sites({ query, routes, sites, pass, user = null, onLogin
   );
 }
 const SITE_NAME = /^[a-z0-9][a-z0-9-]{1,30}$/;
+type SiteFilter = 'all' | 'apps' | 'web' | 'links';
+const FILTERS: Record<SiteFilter, { test: (kind: string) => boolean }> = {
+  all: { test: () => true },
+  apps: { test: (k) => k === 'app' },
+  web: { test: (k) => k === 'wordpress' || k === 'aisite' },
+  links: { test: (k) => k !== 'app' && k !== 'wordpress' && k !== 'aisite' },
+};
+const FILTER_LABEL: Record<SiteFilter, string> = { all: 'All', apps: 'Apps', web: 'WordPress / AI', links: 'Links' };

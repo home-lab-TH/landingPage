@@ -14,6 +14,7 @@ export type Page =
   | 'provision'
   | 'agents'
   | 'users'
+  | 'minecraft'
   | 'login';
 export type ProvisionType = 'vm' | 'lxc';
 export type Guest = { id: number; name: string; type: 'lxc' | 'vm'; status: string; cpu: number; cpus: number; mem: number; maxmem: number; disk: number; maxdisk: number; uptime: number; tags?: string[] };
@@ -27,6 +28,22 @@ export type Route = { name: string; title: string; path: string; kind: string };
 export type HubAgent = { id: number; name: string; role: string; status: string; last_seen: number | null; last_activity: string };
 export type HubTask = { id: number; title: string; status: string; priority: string; assigned_to: string | null; updated_at: number | null; tags: string[]; description?: string; created_at?: number | null };
 export type HubComment = { id: number; author: string; body: string; at: number | null };
+// ---- Minecraft (CT 200 on pve2) & Proxmox nodes, served by ./api/minecraft and ./api/nodes ----
+export interface MinecraftPlayer { name: string; id: string }
+export interface MinecraftServer {
+  id: string; name: string; host: string; port: number; joinAddress: string;
+  type: string; ram: string; autoStart: boolean;
+  online: boolean; ms: number; version: string | null;
+  players: { online: number; max: number; sample: MinecraftPlayer[] };
+  motd: string | null;
+}
+export interface MinecraftHost {
+  node: string; nodeIp: string; ct: number; ctName: string; ip: string;
+  craftyUp: boolean; craftyMs: number; craftyUrls: string[]; backupSchedule: string;
+}
+export interface MinecraftData { updatedAt: string; host: MinecraftHost; servers: MinecraftServer[] }
+export interface HomelabNode { id: string; name: string; ip: string; port: number; role: string; specs: string; online: boolean; ms: number; url: string }
+export interface NodesData { updatedAt: string; nodes: HomelabNode[] }
 export type HubTaskDetail = { task: HubTask; comments: HubComment[] };
 export type HubEvent = { id: number; type: string; actor: string; description: string; at: number | null };
 export type HubData = { agents: HubAgent[]; tasks: HubTask[]; activity: HubEvent[]; at: string };
@@ -172,6 +189,7 @@ export const pageForHash = (): Page => {
   if (route === 'agents') return 'agents';
   if (route === 'users' || route.startsWith('users/')) return 'users';
   if (route === 'login') return 'login';
+  if (route === 'minecraft') return 'minecraft';
   return 'overview';
 };
 export const bytes = (n: number) => {
@@ -724,6 +742,7 @@ export const Icon = ({ name, className = 'icon' }: { name: string; className?: s
     activity: <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />,
     terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3" /><path d="M13 15h4" /></>,
     chevron: <path d="m6 9 6 6 6-6" />,
+    cube: <><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7Z" /><path d="M3.5 7 12 11.5 20.5 7" /><path d="M12 11.5v10" /></>,
     back: <path d="m15 18-6-6 6-6" />,
     alert: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>,
   };

@@ -2,8 +2,10 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import Overview from './pages/Overview';
 import Services from './pages/Services';
 import { CommandBar } from './ui/CommandBar';
+import config from './config/services.json';
 import {
   AVATAR_GLYPH,
+  Dot,
   Icon,
   Login,
   PRIVILEGE_META,
@@ -28,18 +30,35 @@ const UpdatesPage = lazy(() => import('./ui/Ops').then((m) => ({ default: m.Upda
 const Agents = lazy(() => import('./pages/Agents'));
 const Users = lazy(() => import('./pages/Users'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const Minecraft = lazy(() => import('./pages/Minecraft'));
 
-const BASE_NAV: [Page, string, string][] = [
-  ['overview', 'Overview', 'grid'],
-  ['services', 'Services', 'server'],
-  ['topology', 'Topology', 'map'],
-  ['sites', 'Sites', 'pulse'],
-  ['notes', 'Notes', 'note'],
-  ['logs', 'Logs', 'list'],
-  ['updates', 'Updates', 'refresh'],
-  ['agents', 'Agents', 'bot'],
-  ['provision', 'Create', 'plus'],
+type NavItem = [Page, string, string];
+type NavGroup = { label: string; items: NavItem[] };
+
+// Sidebar sections. Updates / Users are filtered in by privilege at render time.
+const NAV_GROUPS: NavGroup[] = [
+  { label: 'Workspace', items: [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['topology', 'Topology', 'map'], ['minecraft', 'Minecraft', 'gamepad']] },
+  { label: 'Manage', items: [['sites', 'Sites', 'pulse'], ['provision', 'Create', 'plus'], ['notes', 'Notes', 'note']] },
+  { label: 'Operations', items: [['agents', 'Agents', 'bot'], ['logs', 'Logs', 'list'], ['updates', 'Updates', 'refresh'], ['users', 'Users', 'users']] },
 ];
+const DOCK: NavItem[] = [['overview', 'Overview', 'grid'], ['services', 'Services', 'server'], ['agents', 'Agents', 'bot']];
+const PAGE_TITLE: Record<Page, [string, string]> = {
+  overview: ['Workspace', 'Overview'],
+  services: ['Workspace', 'Services'],
+  topology: ['Workspace', 'Topology'],
+  minecraft: ['Workspace', 'Minecraft'],
+  sites: ['Manage', 'Sites'],
+  provision: ['Manage', 'Create'],
+  notes: ['Manage', 'Notes'],
+  agents: ['Operations', 'Agents'],
+  logs: ['Operations', 'Logs'],
+  updates: ['Operations', 'Updates'],
+  users: ['Operations', 'Users & Audit'],
+  login: ['Account', 'Session'],
+};
+const hrefFor = (id: Page) => `#/${id === 'overview' ? '' : id}`;
+const COLLAPSE_KEY = 'homelab-sidebar-collapsed';
+const readCollapsed = () => { try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; } };
 
 const isMac = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform);
 
@@ -122,6 +141,8 @@ export function App() {
   });
   const [now, setNow] = useState(() => Date.now());
   const [bar, setBar] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const { data: stats, error: statsError } = usePoll<Stats>('./api/stats', 5000);
   const { data: siteData } = usePoll<{ results: SiteState[] }>('./api/services', 30000);
@@ -181,6 +202,7 @@ export function App() {
       setPage(pageForHash());
       const m = window.location.hash.match(/^#\/?logs\/([a-z0-9-]+)/);
       if (m) setLogKey(m[1]);
+      setMobileMenuOpen(false);
       window.scrollTo(0, 0);
     };
     const onKey = (e: KeyboardEvent) => {
@@ -188,6 +210,7 @@ export function App() {
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
       if (e.key === '/' && !typing) { e.preventDefault(); search.current?.focus(); }
       if (e.key === 'Escape' && document.activeElement === search.current) { setQuery(''); search.current?.blur(); }
+      else if (e.key === 'Escape') setMobileMenuOpen(false);
     };
     window.addEventListener('hashchange', onHash);
     window.addEventListener('keydown', onKey);
@@ -221,60 +244,160 @@ export function App() {
   const canRunUpdates = Boolean(pass) && allowed('run_updates');
   const overviewPass = pass && (allowed('view_private') || allowed('manage_containers')) ? pass : '';
 
-  const nav = useMemo<[Page, string, string][]>(() => {
-    const base = canRunUpdates ? BASE_NAV : BASE_NAV.filter(([id]) => id !== 'updates');
-    return canManageUsers ? [...base, ['users', 'Users', 'users']] : base;
-  }, [canRunUpdates, canManageUsers]);
+  const navGroups = useMemo<NavGroup[]>(
+    () => NAV_GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter(([id]) => (id !== 'updates' || canRunUpdates) && (id !== 'users' || canManageUsers)),
+    })),
+    [canRunUpdates, canManageUsers],
+  );
+  const nav = useMemo<NavItem[]>(() => navGroups.flatMap((g) => g.items), [navGroups]);
+
+  useEffect(() => {
+    try { localStorage.setItem(COLLAPSE_KEY, sidebarCollapsed ? '1' : '0'); } catch { /* private mode */ }
+  }, [sidebarCollapsed]);
+
+  const guests = stats?.guests ?? [];
+  const running = guests.filter((g) => g.status === 'running').length;
+  const sitesDown = siteData ? config.sites.filter((s) => sites[s.id] && !sites[s.id].up).length : 0;
+  const health: 'ok' | 'warn' | 'down' = !stats ? (statsError ? 'down' : 'warn') : running < guests.length || sitesDown > 0 ? 'warn' : 'ok';
+  const healthText = !stats
+    ? (statsError ? 'Server unreachable' : 'Connecting…')
+    : `${running}/${guests.length} running${sitesDown ? ` · ${sitesDown} site${sitesDown > 1 ? 's' : ''} down` : ''}`;
+  const [crumb, title] = PAGE_TITLE[page];
+  const closeMenu = () => setMobileMenuOpen(false);
 
   const q = query.trim().toLowerCase();
   const guestExpiry = user?.role === 'recruiter_guest' ? formatCountdown(user.expiresAt, now) : null;
 
   return (
-    <div className="shell">
+    <div className={`app-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
       <div className="glow" aria-hidden="true" />
-      <header className="top">
-        <a className="brand" href="#/" aria-label="Homelab home">
-          <span className="logo"><i /></span>
-          <span><b>Homelab</b><small>{stats ? `${stats.node} · ${stats.guests.filter((g) => g.status === 'running').length} running` : 'Proxmox server'}</small></span>
-        </a>
-        <label className="search">
-          <Icon name="search" />
-          <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search this page" />
-          <kbd>/</kbd>
-          <button type="button" className="cmdk-hint" onClick={() => setBar(true)} title="Jump to a page, site or container" aria-label="Open the command bar"><kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd></button>
-        </label>
-        <div className="top-auth">
-          {user ? (
-            <>
-              <a className="user-pill" href="#/login" title="View session, privileges and change password">
-                <span className="user-pill-glyph" aria-hidden="true">{AVATAR_GLYPH[user.avatar] ?? '◈'}</span>
-                <span className="user-pill-name">{user.displayName}</span>
-                <span className={`role-badge ${ROLE_META[user.role].cls}`}>{ROLE_META[user.role].label}</span>
-              </a>
-              <button type="button" className="btn lock on" onClick={() => void handleLogout()} title="Sign out">
-                <Icon name="logout" />Sign Out
-              </button>
-            </>
-          ) : pass ? (
-            <>
-              <a className="user-pill" href="#/login" title="Legacy password session">
-                <span className="user-pill-name">Legacy</span>
-                <span className="role-badge owner">OWNER</span>
-              </a>
-              <button type="button" className="btn lock on" onClick={() => void handleLogout()} title="Lock controls">
-                <Icon name="unlock" />Sign Out
-              </button>
-            </>
-          ) : (
-            <a className="btn lock solid" href="#/login"><Icon name="lock" />Sign in</a>
-          )}
+      {mobileMenuOpen && <div className="sidebar-backdrop" onClick={() => setMobileMenuOpen(false)} />}
+
+      <aside className="sidebar" aria-label="Main navigation">
+        <div className="sidebar-head">
+          <a className="brand" href="#/" aria-label="Homelab home" onClick={closeMenu}>
+            <span className="logo"><i /></span>
+            <span className="brand-text"><b>Homelab</b><small>{stats ? `${stats.node} · ${running} running` : 'Proxmox server'}</small></span>
+          </a>
+          <button
+            type="button"
+            className="collapse-btn"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <Icon name={sidebarCollapsed ? 'chevron' : 'back'} />
+          </button>
         </div>
-        <nav className="tabs" aria-label="Pages">
-          {nav.map(([id, label, icon]) => (
-            <a key={id} href={`#/${id === 'overview' ? '' : id}`} className={page === id ? 'on' : ''} aria-current={page === id ? 'page' : undefined}><Icon name={icon} />{label}</a>
+
+        <nav className="sidebar-nav" aria-label="Pages">
+          {navGroups.filter((g) => g.items.length).map((g) => (
+            <div className="nav-group" key={g.label}>
+              <div className="nav-group-label">{g.label}</div>
+              {g.items.map(([id, label, icon]) => (
+                <a
+                  key={id}
+                  href={hrefFor(id)}
+                  className={`nav-item ${page === id ? 'on' : ''}`}
+                  aria-current={page === id ? 'page' : undefined}
+                  title={sidebarCollapsed ? label : undefined}
+                  onClick={closeMenu}
+                >
+                  <Icon name={icon} />
+                  <span>{label}</span>
+                </a>
+              ))}
+            </div>
           ))}
         </nav>
-      </header>
+
+        <div className="sidebar-quick">
+          <div className="nav-group-label">Quick apps</div>
+          <ul>
+            {config.sites.map((s) => {
+              const st = sites[s.id];
+              const state: 'up' | 'down' | 'idle' = st ? (st.up ? 'up' : 'down') : 'idle';
+              return (
+                <li key={s.id}>
+                  <a className="quick-app" href={s.url} title={`${s.title} · CT ${s.ct}${st ? ` · ${st.up ? `${st.ms} ms` : 'down'}` : ''}`}>
+                    <Dot state={state} />
+                    <span className="quick-app-name">{s.title}</span>
+                    <Icon name="external" className="icon-xs" />
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        <div className="sidebar-foot">
+          <a href="https://github.com/lakylaky963/homelab-ops" target="_blank" rel="noreferrer" title="homelab-ops on GitHub">
+            <Icon name="github" className="icon-xs" /><span>homelab-ops</span>
+          </a>
+          <small className="muted">Proxmox VE{stats?.host?.version ? ` ${stats.host.version}` : ''}</small>
+        </div>
+      </aside>
+
+      <div className="main-col">
+        <header className="topbar">
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="menu-btn"
+              onClick={() => setMobileMenuOpen((o) => !o)}
+              aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+              aria-expanded={mobileMenuOpen}
+            >
+              <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <div className="topbar-title">
+              <small>{crumb}</small>
+              <h2>{title}</h2>
+            </div>
+            <a className={`health-pill ${health}`} href="#/topology" title="Guests running on the Proxmox node">
+              <span className={`dot ${health === 'ok' ? 'up' : health === 'down' ? 'down' : 'idle'}`} aria-hidden="true" />
+              <span>{healthText}</span>
+            </a>
+          </div>
+
+          <div className="topbar-actions">
+            <label className="search">
+              <Icon name="search" />
+              <input ref={search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search this page" />
+              <kbd>/</kbd>
+              <button type="button" className="cmdk-hint" onClick={() => setBar(true)} title="Jump to a page, site or container" aria-label="Open the command bar"><kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd></button>
+            </label>
+            <div className="top-auth">
+              {user ? (
+                <>
+                  <a className="user-pill" href="#/login" title="View session, privileges and change password">
+                    <span className="user-pill-glyph" aria-hidden="true">{AVATAR_GLYPH[user.avatar] ?? '◈'}</span>
+                    <span className="user-pill-name">{user.displayName}</span>
+                    <span className={`role-badge ${ROLE_META[user.role].cls}`}>{ROLE_META[user.role].label}</span>
+                  </a>
+                  <button type="button" className="btn lock on" onClick={() => void handleLogout()} title="Sign out">
+                    <Icon name="logout" /><span>Sign Out</span>
+                  </button>
+                </>
+              ) : pass ? (
+                <>
+                  <a className="user-pill" href="#/login" title="Legacy password session">
+                    <span className="user-pill-name">Legacy</span>
+                    <span className="role-badge owner">OWNER</span>
+                  </a>
+                  <button type="button" className="btn lock on" onClick={() => void handleLogout()} title="Lock controls">
+                    <Icon name="unlock" /><span>Sign Out</span>
+                  </button>
+                </>
+              ) : (
+                <a className="btn lock solid" href="#/login"><Icon name="lock" /><span>Sign in</span></a>
+              )}
+            </div>
+          </div>
+        </header>
 
       {user?.role === 'recruiter_guest' && (
         <aside className={`sandbox-ribbon ${guestExpiry?.expired ? 'expired' : ''}`} role="status">
@@ -305,6 +428,7 @@ export function App() {
         <Suspense fallback={<p className="muted loading">Loading…</p>}>
           {page === 'overview' && <Overview query={q} stats={stats} statsError={statsError} sites={sites} pass={overviewPass} user={user} />}
           {page === 'services' && <Services query={q} sites={sites} />}
+          {page === 'minecraft' && <Minecraft query={q} />}
           {page === 'topology' && <Topology stats={stats} pass={overviewPass} />}
           {page === 'sites' && (pass && !allowed('manage_sites') ? <InsufficientPrivilege title="Sites" privilege="manage_sites" user={user} /> : <Sites query={q} routes={routeData?.routes ?? []} sites={sites} pass={pass} user={user} onLogin={handleLogin} />)}
           {page === 'notes' && (pass && !allowed('manage_notes') ? <InsufficientPrivilege title="Notes" privilege="manage_notes" user={user} /> : <NotesPage query={q} pass={pass} onLogin={handleLogin} />)}
@@ -328,11 +452,24 @@ export function App() {
           )}
         </Suspense>
       </main>
-      {bar && <CommandBar nav={nav} stats={stats} pass={pass} user={user} onClose={() => setBar(false)} />}
-      <footer className="foot">
-        <span>Homelab · Proxmox · Docker · Tailscale</span>
-        <a href="https://github.com/lakylaky963/homelab-ops" target="_blank" rel="noreferrer"><Icon name="github" className="icon-xs" />homelab-ops</a>
-      </footer>
+        <footer className="foot">
+          <span>Homelab · Proxmox · Docker · Tailscale</span>
+          <a href="https://github.com/lakylaky963/homelab-ops" target="_blank" rel="noreferrer"><Icon name="github" className="icon-xs" />homelab-ops</a>
+        </footer>
+      </div>
+
+      <nav className="mobile-dock" aria-label="Quick navigation">
+        {DOCK.map(([id, label, icon]) => (
+          <a key={id} href={hrefFor(id)} className={page === id ? 'on' : ''} aria-current={page === id ? 'page' : undefined}>
+            <Icon name={icon} /><span>{label}</span>
+          </a>
+        ))}
+        <button type="button" className={mobileMenuOpen ? 'on' : ''} onClick={() => setMobileMenuOpen((o) => !o)} aria-label="More pages" aria-expanded={mobileMenuOpen}>
+          <Icon name="list" /><span>More</span>
+        </button>
+      </nav>
+
+      {bar && <CommandBar nav={nav} stats={stats} sites={sites} pass={pass} user={user} onClose={() => setBar(false)} />}
     </div>
   );
 }

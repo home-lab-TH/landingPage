@@ -1,3 +1,9 @@
+/* Homelab v4: base styles live in layer `base`; redesign.css (layer `v4`) overrides them.
+   @import must precede all rules, so it sits here rather than at the bottom (Vite drops a trailing @import). */
+@layer base, v4;
+@import './redesign.css' layer(v4);
+
+@layer base {
 /* Homelab dashboard v3. Near-black, a faint grid and one slow amber glow. Cards in layers:
    panel > card > tile. System fonts only (no web-font download). No canvas, no per-frame JS. */
 :root {
@@ -756,3 +762,4 @@ details.more[open] summary { margin-bottom: 14px; }
 }
 .aw-page .stats { grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0 0 18px; }
 @media (max-width: 960px) { .aw-page .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+} /* end @layer base */

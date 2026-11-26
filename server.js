@@ -1,5 +1,6 @@
 import express from 'express';
 import https from 'node:https';
+import net from 'node:net';
 import path from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1216,6 +1217,166 @@ export function createApp(options = {}) {
     if (Date.now() - siteCache.at < 30000 && siteCache.data) return response.json(siteCache.data);
     return response.json(await probeAll());
   });
+
+  // ---------- /api/minecraft: live Server List Ping of CT 200 (cached 10 s, public, no secrets) ----------
+  const writeVarInt = (value) => {
+    const out = [];
+    let v = value >>> 0;
+    do { let b = v & 0x7f; v >>>= 7; if (v) b |= 0x80; out.push(b); } while (v);
+    return Buffer.from(out);
+  };
+  const readVarInt = (buf, offset) => {
+    let value = 0; let shift = 0; let pos = offset;
+    for (;;) {
+      if (pos >= buf.length) return null; // need more bytes
+      const b = buf[pos++];
+      value |= (b & 0x7f) << shift;
+      if (!(b & 0x80)) return { value: value >>> 0, size: pos - offset };
+      shift += 7;
+      if (shift > 35) throw new Error('VarInt too big');
+    }
+  };
+  const mcPacket = (id, payload) => {
+    const body = Buffer.concat([writeVarInt(id), payload]);
+    return Buffer.concat([writeVarInt(body.length), body]);
+  };
+  const motdText = (d) => {
+    if (d == null) return '';
+    if (typeof d === 'string') return d;
+    let s = typeof d.text === 'string' ? d.text : '';
+    if (Array.isArray(d.extra)) s += d.extra.map(motdText).join('');
+    return s;
+  };
+  const slpPing = (host, port, timeoutMs = 1800) => new Promise((resolve) => {
+    const started = Date.now();
+    let done = false;
+    let chunks = Buffer.alloc(0);
+    const socket = net.createConnection({ host, port });
+    const finish = (result) => {
+      if (done) return; done = true;
+      clearTimeout(timer); socket.destroy();
+      resolve({ ms: Date.now() - started, ...result });
+    };
+    const timer = setTimeout(() => finish({ online: false, error: 'timeout' }), timeoutMs);
+    socket.on('error', (e) => finish({ online: false, error: e.code || 'error' }));
+    socket.on('close', () => finish({ online: false, error: 'closed' }));
+    socket.on('connect', () => {
+      const hostBuf = Buffer.from(host, 'utf8');
+      const portBuf = Buffer.alloc(2); portBuf.writeUInt16BE(port);
+      // handshake: protocol version (767 = 1.21.1; servers answer status for any), host, port, next state 1 (status)
+      const handshake = mcPacket(0x00, Buffer.concat([writeVarInt(767), writeVarInt(hostBuf.length), hostBuf, portBuf, writeVarInt(1)]));
+      socket.write(Buffer.concat([handshake, mcPacket(0x00, Buffer.alloc(0))]));
+    });
+    socket.on('data', (data) => {
+      chunks = Buffer.concat([chunks, data]);
+      if (chunks.length > 1 << 21) return finish({ online: false, error: 'response too large' });
+      try {
+        const len = readVarInt(chunks, 0); if (!len) return;
+        if (chunks.length < len.size + len.value) return;
+        const id = readVarInt(chunks, len.size); if (!id || id.value !== 0x00) return finish({ online: false, error: 'bad packet' });
+        const strLen = readVarInt(chunks, len.size + id.size); if (!strLen) return;
+        const start = len.size + id.size + strLen.size;
+        const json = JSON.parse(chunks.subarray(start, start + strLen.value).toString('utf8'));
+        return finish({
+          online: true,
+          version: String(json.version?.name ?? ''),
+          players: {
+            online: Number(json.players?.online ?? 0),
+            max: Number(json.players?.max ?? 0),
+            sample: Array.isArray(json.players?.sample) ? json.players.sample.slice(0, 20).map((p) => ({ name: String(p?.name ?? ''), id: String(p?.id ?? '') })) : [],
+          },
+          motd: motdText(json.description).replace(/§./g, '').trim(),
+        });
+      } catch {
+        return finish({ online: false, error: 'parse error' });
+      }
+    });
+  });
+  const tcpProbe = (host, port, timeoutMs = 1500) => new Promise((resolve) => {
+    const started = Date.now();
+    const socket = net.createConnection({ host, port });
+    let done = false;
+    const finish = (online) => { if (done) return; done = true; clearTimeout(timer); socket.destroy(); resolve({ online, ms: Date.now() - started }); };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.on('connect', () => finish(true));
+    socket.on('error', () => finish(false));
+  });
+  const httpsHeadProbe = (host, port, timeoutMs = 1500) => new Promise((resolve) => {
+    const started = Date.now();
+    let done = false;
+    const finish = (online) => { if (done) return; done = true; clearTimeout(timer); resolve({ online, ms: Date.now() - started }); };
+    let req;
+    const timer = setTimeout(() => { req?.destroy(); finish(false); }, timeoutMs);
+    try {
+      // self-signed Crafty cert: reachability only, nothing sensitive is sent or read
+      req = https.request({ host, port, method: 'HEAD', path: '/', rejectUnauthorized: false }, (res) => { res.resume(); finish(true); });
+      req.on('error', () => finish(false));
+      req.end();
+    } catch { finish(false); }
+  });
+  const MC_HOST = process.env.MC_HOST || '10.0.0.160';
+  const CRAFTY_HOST = process.env.CRAFTY_HOST || MC_HOST;
+  const CRAFTY_PORT = Number(process.env.CRAFTY_PORT) || 8443;
+  const MC_SERVERS = [
+    { id: 'bmc5', name: 'Better MC [BMC5] v53', host: MC_HOST, port: Number(process.env.MC_BMC5_PORT) || 25565, joinAddress: process.env.MC_BMC5_JOIN || 'mc.avrahamarazi.com', type: 'NeoForge 1.21.1', ram: '9 GB', autoStart: true },
+    { id: 'vanilla', name: 'Vanilla 1 (Paper)', host: MC_HOST, port: Number(process.env.MC_VANILLA_PORT) || 25566, joinAddress: process.env.MC_VANILLA_JOIN || `${MC_HOST}:25566`, type: 'Paper', ram: '3 GB', autoStart: true },
+  ];
+  const probeMinecraft = async () => {
+    const [crafty, ...pings] = await Promise.all([
+      httpsHeadProbe(CRAFTY_HOST, CRAFTY_PORT, 1500),
+      ...MC_SERVERS.map((s) => slpPing(s.host, s.port, 1800)),
+    ]);
+    return {
+      updatedAt: new Date().toISOString(),
+      host: {
+        node: 'pve2', nodeIp: '10.0.0.220', ct: 200, ctName: 'minecraft', ip: MC_HOST,
+        craftyUp: crafty.online, craftyMs: crafty.ms,
+        craftyUrls: ['https://central-proxy.bluebuck-tailor.ts.net:8443', 'https://crafty.avrahamarazi.com'],
+        backupSchedule: 'Daily 04:15 -> server:/mnt/backup2/minecraft',
+      },
+      servers: MC_SERVERS.map((s, i) => {
+        const p = pings[i];
+        return {
+          ...s,
+          online: p.online, ms: p.ms,
+          version: p.online ? p.version : null,
+          players: p.online ? p.players : { online: 0, max: 0, sample: [] },
+          motd: p.online ? (p.motd || s.name) : null,
+        };
+      }),
+    };
+  };
+  // ---------- /api/nodes: Proxmox nodes reachable on :8006 (cached 15 s, public) ----------
+  const HOMELAB_NODES = [
+    { id: 'server', name: 'server', ip: process.env.PVE1_HOST || '10.0.0.2', role: 'Primary Cluster Host', specs: 'Proxmox VE 9.2 · i5-10400 · 16 GB RAM · NVMe + 3x500 GB HDD' },
+    { id: 'pve2', name: 'pve2', ip: process.env.PVE2_HOST || '10.0.0.220', role: 'Minecraft Node (CT 200)', specs: 'Proxmox VE 9.2 · IdeaPad i7-1165G7 · 16 GB RAM · 500 GB NVMe' },
+    { id: 'pve3', name: 'pve3', ip: process.env.PVE3_HOST || '10.0.0.221', role: 'Expansion Node (pve3)', specs: process.env.PVE3_SPECS || 'Proxmox VE node' },
+  ];
+  const probeNodes = async () => {
+    const results = await Promise.all(HOMELAB_NODES.map((n) => tcpProbe(n.ip, 8006, 1500)));
+    return {
+      updatedAt: new Date().toISOString(),
+      nodes: HOMELAB_NODES.map((n, i) => ({ ...n, port: 8006, online: results[i].online, ms: results[i].ms, url: `https://${n.ip}:8006` })),
+    };
+  };
+  // shared cache + in-flight dedupe so a burst of dashboards triggers one probe
+  const cachedProbe = (ttlMs, fn) => {
+    let cache = { at: 0, data: null }; let pending = null;
+    return async () => {
+      if (cache.data && Date.now() - cache.at < ttlMs) return cache.data;
+      if (!pending) pending = fn().then((data) => { cache = { at: Date.now(), data }; return data; }).finally(() => { pending = null; });
+      return pending;
+    };
+  };
+  const minecraftStatus = cachedProbe(10000, probeMinecraft);
+  const nodesStatus = cachedProbe(15000, probeNodes);
+  app.get('/api/minecraft', async (_request, response) => {
+    try { return response.json(await minecraftStatus()); } catch { return response.status(502).json({ message: 'Minecraft probe failed.' }); }
+  });
+  app.get('/api/nodes', async (_request, response) => {
+    try { return response.json(await nodesStatus()); } catch { return response.status(502).json({ message: 'Node probe failed.' }); }
+  });
+
   app.get('/api/uptime', (request, response) => {
     const hours = Math.max(1, Math.min(168, Number(request.query.hours) || 24));
     const since = Date.now() - hours * 3600000;

@@ -89,9 +89,9 @@
       "url": "./game/",
       "check": "http://10.0.0.250/game/",
       "icon": "NL",
-      "ct": 101,
+      "ct": 112,
       "owner": "avraham",
-      "repo": "https://github.com/lakylaky963/portfolio",
+      "repo": "https://github.com/lakylaky963/arcade-2077",
       "tags": [
         "Canvas 2D",
         "WebAudio",
@@ -122,8 +122,8 @@
   ],
   "stacks": {
     "100": [
-      "web \u00b7 nginx",
-      "backend \u00b7 node 22"
+      "web · nginx",
+      "backend · node 22"
     ],
     "101": [
       "nginx",
@@ -139,7 +139,7 @@
       "server"
     ],
     "105": [
-      "dashboard \u00b7 node"
+      "dashboard · node"
     ],
     "106": [
       "mongod 7.0"
@@ -154,11 +154,17 @@
       "site agent"
     ],
     "110": [
-      "news \u00b7 node 22"
+      "news · node 22"
     ],
     "111": [
-      "agents-hub \u00b7 node 22",
+      "agents-hub · node 22",
       "cron agents"
+    ],
+    "112": [
+      "arcade 2077 · nginx"
+    ],
+    "113": [
+      "wildcard · colyseus"
     ]
   },
   "links": [
@@ -176,8 +182,8 @@
     }
   ],
   "network": {
-    "101": "10.0.0.250",
     "100": "10.0.0.222",
+    "101": "10.0.0.250",
     "102": "DHCP",
     "103": "10.0.0.224",
     "104": "10.0.0.225",
@@ -186,6 +192,8 @@
     "107": "10.0.0.240",
     "108": "10.0.0.226",
     "110": "10.0.0.151",
-    "111": "10.0.0.152"
+    "111": "10.0.0.152",
+    "112": "10.0.0.153",
+    "113": "10.0.0.154"
   }
 }
